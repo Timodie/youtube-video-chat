@@ -461,4 +461,123 @@ Current system functional, planning migration to:
 - 🎯 **Video-specific search** with precise timestamp navigation
 - 🧪 **Comprehensive testing** ensures production readiness
 
+## Next Phase: Optimized Architecture (Latest)
+
+### Issues Identified with Current Direct RAG
+After successful RAG implementation, optimization opportunities discovered:
+
+1. **Duplicate Processing Problem**: Same videos re-processed multiple times causing:
+   - Unnecessary OpenAI embedding API costs
+   - Database unique constraint violations (`video_id, chunk_number` conflicts)
+   - Wasted computational resources
+
+2. **Poor User Experience**: Chrome extension blocks on chunking completion
+   - Users wait unnecessarily during background processing (~30-40 seconds)
+   - No indication when chat functionality becomes available
+   - Silent failures when RAG processing incomplete
+
+3. **Architectural Inefficiency**: 
+   - No transcript caching for repeated requests
+   - No status API for chat readiness
+   - Residual n8n dependencies still present
+
+### New Optimized Architecture Design
+
+**Core Principle**: *Instant transcript display + background RAG processing + smart caching*
+
+#### 1. Dual Table Strategy
+```sql
+-- Fast transcript caching (new)
+CREATE TABLE youtube_transcripts (
+  video_id varchar primary key,
+  url varchar not null,
+  title varchar not null,
+  transcript_data jsonb not null,
+  created_at timestamp default now()
+);
+
+-- RAG chunks (existing)
+youtube_transcript_pages -- unchanged
+```
+
+#### 2. Optimized Request Flow
+```
+Chrome Extension Request → Flask Server
+    ↓
+Check youtube_transcripts cache
+    ├─ EXISTS → Return instantly (~1 second)
+    └─ NOT EXISTS → Extract with yt-dlp (~30-40 seconds)
+    ↓
+Store in youtube_transcripts (always)
+    ↓
+Check if youtube_transcript_pages has chunks
+    ├─ EXISTS → Skip processing (return rag_stored: true)
+    └─ NOT EXISTS → Background chunk processing
+    ↓
+Return transcript immediately (non-blocking)
+```
+
+#### 3. Smart Duplicate Prevention
+```python
+# In rag_integration.py
+async def ingest_transcript(video_id, ...):
+    existing_chunks = supabase.from_('youtube_transcript_pages') \
+        .select('chunk_number', count='exact') \
+        .eq('video_id', video_id).execute()
+    
+    if existing_chunks.count > 0:
+        print(f"✅ Video {video_id} already processed ({existing_chunks.count} chunks)")
+        return True  # RAG data available for chat
+    
+    # Only process if no chunks exist
+    result = await process_and_store_transcript(...)
+    return bool(result)
+```
+
+#### 4. Chat Status API
+```python
+# New endpoint: GET /chat/status/<video_id>
+{
+  "available": true,
+  "chunk_count": 29,
+  "status": "ready" | "processing" | "not_found"
+}
+```
+
+#### 5. Chrome Extension Enhancement
+```javascript
+// Progressive enhancement pattern
+1. Show transcript immediately after extraction
+2. Poll /chat/status/<video_id> every 10 seconds
+3. Enable chat tab when status === "ready"
+4. Show "Processing... retry in 2 minutes" while processing
+```
+
+### Implementation Benefits
+
+**Performance Improvements:**
+- ⚡ **Instant transcript display** - No waiting for chunking
+- 💰 **Cost reduction** - Skip duplicate embedding generation
+- 🔄 **Smart caching** - Avoid re-extracting same videos
+
+**User Experience:**
+- 📱 **Immediate feedback** - Transcript shows instantly
+- 🎯 **Clear expectations** - Users know when chat is ready
+- 🔁 **Retry mechanism** - Graceful handling of processing delays
+
+**System Reliability:**
+- 🛡️ **No duplicate conflicts** - Skip existing chunks
+- 🧹 **Clean architecture** - Complete n8n removal
+- 📊 **Status transparency** - Monitor processing state
+
+### Migration Plan
+1. Create `youtube_transcripts` caching table
+2. Update Flask `/transcript` endpoint for instant returns
+3. Add duplicate detection in RAG integration
+4. Implement `/chat/status` endpoint
+5. Update Chrome extension for progressive enhancement
+6. Remove all n8n fallback code
+
+This architecture ensures **instant user feedback** while maintaining **efficient background processing** and **cost optimization**.
+
 Last updated: July 26, 2025

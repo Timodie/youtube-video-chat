@@ -1,0 +1,13 @@
+# Core Flask dependencies
+Flask[async]==3.0.0
+flask-cors==4.0.0
+requests==2.32.3
+
+# RAG Integration dependencies
+python-dotenv==1.0.1
+openai==1.59.6
+supabase==2.11.0
+pydantic-ai==0.0.18
+
+# Additional dependencies for RAG functionality
+logfire==3.1.0

@@ -6,7 +6,39 @@ import subprocess
 import json
 import tempfile
 import os
+import asyncio
 from pathlib import Path
+from dotenv import load_dotenv
+from supabase import create_client, Client
+from openai import AsyncOpenAI
+
+# Load environment variables
+load_dotenv()
+
+# Initialize RAG integration
+rag_integration = None
+
+try:
+    from rag_integration import create_rag_integration
+    
+    # Initialize clients for RAG
+    supabase_client: Client = create_client(
+        os.getenv("SUPABASE_URL"),
+        os.getenv("SUPABASE_SERVICE_KEY")
+    )
+    openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    
+    # Create RAG integration
+    rag_integration = create_rag_integration(supabase_client, openai_client)
+    
+    if rag_integration:
+        print("✅ RAG integration enabled")
+    else:
+        print("⚠️ RAG integration failed to initialize")
+        
+except Exception as e:
+    print(f"⚠️ RAG integration not available: {e}")
+    rag_integration = None
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for Chrome extension
@@ -245,10 +277,32 @@ def get_transcript():
         # Extract channel name (simplified - you can enhance this)
         channel = "Unknown Channel"  # You can enhance this by parsing the YouTube page
 
-        # Send transcript to n8n for processing and storage
-        n8n_success = send_transcript_to_n8n(video_id, video_title, youtube_url, channel, transcript_data)
+        # Try RAG ingest (non-blocking) - new direct approach
+        rag_stored = False
+        if rag_integration:
+            try:
+                print(f"🔄 Attempting RAG ingest for video {video_id}")
+                rag_stored = asyncio.run(rag_integration.ingest_transcript(
+                    video_id=video_id,
+                    video_url=youtube_url,
+                    video_title=video_title,
+                    transcript_data=transcript_data
+                ))
+                print(f"{'✅' if rag_stored else '⚠️'} RAG ingest {'succeeded' if rag_stored else 'failed'} for video {video_id}")
+            except Exception as e:
+                print(f"❌ RAG ingest error for video {video_id}: {e}")
+                rag_stored = False
+        else:
+            print(f"⚠️ RAG integration not available for video {video_id}")
 
-        # Return structured response
+        # Fallback: Also try n8n for backward compatibility (optional)
+        n8n_success = False
+        try:
+            n8n_success = send_transcript_to_n8n(video_id, video_title, youtube_url, channel, transcript_data)
+        except Exception as e:
+            print(f"⚠️ n8n fallback failed: {e}")
+
+        # Return structured response (always succeeds if transcript extraction worked)
         response = {
             "success": True,
             "video_id": video_id,
@@ -257,7 +311,8 @@ def get_transcript():
             "language": "English",
             "language_code": "en",
             "transcript": transcript_data,
-            "n8n_stored": n8n_success
+            "rag_stored": rag_stored,      # New RAG storage status
+            "n8n_stored": n8n_success      # Legacy n8n status
         }
 
         return jsonify(response)
@@ -272,8 +327,8 @@ def get_transcript():
         }), 500
 
 @app.route('/chat', methods=['POST'])
-def chat_with_video():
-    """Chat about a video using the n8n AI agent"""
+async def chat_with_video():
+    """Chat about a video using the RAG AI agent"""
     try:
         data = request.get_json()
         chat_input = data.get('chatInput')
@@ -286,55 +341,88 @@ def chat_with_video():
         if not video_id:
             return jsonify({"error": "video_id is required"}), 400
 
-        # Send chat request to n8n
-        n8n_payload = {
-            "chatInput": chat_input,
-            "video_id": video_id,
-            "sessionId": session_id
-        }
-
-        print(f"\n💬 SENDING CHAT TO N8N")
+        print(f"\n💬 PROCESSING CHAT REQUEST")
         print(f"   Chat Input: {chat_input}")
         print(f"   Video ID: {video_id}")
         print(f"   Session ID: {session_id}")
-        print(f"   Endpoint: https://taddaifor.app.n8n.cloud/webhook/youtube-chat")
 
-        response = requests.post(
-            "https://taddaifor.app.n8n.cloud/webhook/youtube-chat",
-            json=n8n_payload,
-            headers={
-                "Content-Type": "application/json",
-                "RAGHeader": "RAGHeader"
-            },
-            timeout=30
-        )
+        # Try RAG agent first (primary method)
+        if rag_integration:
+            try:
+                print(f"🤖 Using RAG agent for video {video_id}")
+                
+                result = await rag_integration.chat_with_video(video_id, chat_input)
+                
+                if result["success"]:
+                    print(f"✅ RAG agent response successful")
+                    return jsonify({
+                        "success": True,
+                        "response": result["response"],
+                        "timestamps": result.get("timestamps", []),
+                        "video_id": video_id,
+                        "method": "rag_agent",
+                        "processed_at": result.get("processed_at")
+                    })
+                else:
+                    print(f"⚠️ RAG agent returned error: {result.get('error', 'Unknown error')}")
+                    # Continue to n8n fallback
+                    
+            except Exception as e:
+                print(f"❌ RAG agent failed: {e}")
+                # Continue to n8n fallback
 
-        print(f"\n🤖 N8N CHAT RESPONSE")
-        print(f"   Status Code: {response.status_code}")
-        print(f"   Response Headers: {dict(response.headers)}")
-        print(f"   Response Body: {response.text[:500]}{'...' if len(response.text) > 500 else ''}")
+        # # Fallback to n8n (if RAG failed or not available) - COMMENTED OUT FOR TESTING
+        # try:
+        #     print(f"🔄 Falling back to n8n for video {video_id}")
+        #     
+        #     n8n_payload = {
+        #         "chatInput": chat_input,
+        #         "video_id": video_id,
+        #         "sessionId": session_id
+        #     }
 
-        if response.status_code == 200:
-            print(f"✅ Successfully got chat response for video {video_id}")
-            # Return the raw n8n response for now
-            return jsonify({
-                "success": True,
-                "raw_response": response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
-            })
-        else:
-            print(f"❌ Failed to get chat response: {response.status_code} {response.text}")
-            return jsonify({
-                "success": False,
-                "error": f"n8n request failed: {response.status_code} {response.text}"
-            }), 500
+        #     response = requests.post(
+        #         "https://taddaifor.app.n8n.cloud/webhook/youtube-chat",
+        #         json=n8n_payload,
+        #         headers={
+        #             "Content-Type": "application/json",
+        #             "RAGHeader": "RAGHeader"
+        #         },
+        #         timeout=30
+        #     )
+
+        #     print(f"📥 n8n response: {response.status_code}")
+
+        #     if response.status_code == 200:
+        #         print(f"✅ n8n fallback successful for video {video_id}")
+        #         return jsonify({
+        #             "success": True,
+        #             "response": response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text,
+        #             "video_id": video_id,
+        #             "method": "n8n_fallback",
+        #             "timestamps": []  # n8n may not provide structured timestamps
+        #         })
+        #     else:
+        #         print(f"❌ n8n fallback failed: {response.status_code}")
+        #         
+        # except Exception as e:
+        #     print(f"❌ n8n fallback error: {e}")
+
+        # RAG only mode - no fallback
+        return jsonify({
+            "success": False,
+            "error": "RAG agent failed and n8n fallback is disabled for testing.",
+            "video_id": video_id
+        }), 500
 
     except Exception as e:
         error_message = str(e)
-        print(f"❌ Error in chat: {error_message}")
+        print(f"❌ Critical error in chat endpoint: {error_message}")
 
         return jsonify({
             "success": False,
-            "error": error_message
+            "error": "Internal server error",
+            "video_id": video_id if 'video_id' in locals() else None
         }), 500
 
 if __name__ == '__main__':
