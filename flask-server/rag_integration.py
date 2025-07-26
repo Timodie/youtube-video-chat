@@ -37,7 +37,7 @@ class RAGIntegration:
         transcript_data: List[Dict]
     ) -> bool:
         """
-        Safely ingest transcript data into RAG system.
+        Safely ingest transcript data into RAG system with duplicate detection.
         
         Args:
             video_id: YouTube video ID
@@ -46,14 +46,27 @@ class RAGIntegration:
             transcript_data: Parsed VTT transcript data
             
         Returns:
-            bool: True if ingestion succeeded, False otherwise
+            bool: True if RAG data is available (new or existing), False if failed
         """
         try:
             print(f"🔄 Starting RAG ingest for video {video_id}")
             print(f"   Title: {video_title}")
             print(f"   Transcript entries: {len(transcript_data)}")
             
-            # Call the ingest function from rag-agent
+            # Check if chunks already exist (duplicate detection)
+            existing_chunks = self.deps.supabase.from_('youtube_transcript_pages') \
+                .select('chunk_number', count='exact') \
+                .eq('video_id', video_id) \
+                .execute()
+            
+            if existing_chunks.count and existing_chunks.count > 0:
+                print(f"✅ Video {video_id} already processed with {existing_chunks.count} chunks")
+                print(f"   Skipping chunking and embedding generation (cost savings)")
+                return True  # RAG data is available for chat
+            
+            print(f"🆕 No existing chunks found, processing video {video_id}")
+            
+            # Call the ingest function from rag-agent (only if no chunks exist)
             result = await process_and_store_transcript(
                 video_id=video_id,
                 video_url=video_url,
@@ -63,7 +76,7 @@ class RAGIntegration:
             
             if result:
                 print(f"✅ RAG ingest completed successfully for video {video_id}")
-                print(f"   Stored {len(result)} chunks in database")
+                print(f"   Stored {len(result)} new chunks in database")
                 return True
             else:
                 print(f"⚠️ RAG ingest returned no results for video {video_id}")

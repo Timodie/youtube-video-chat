@@ -92,10 +92,10 @@ async function sendChatMessage() {
   
   if (!message) return;
   
-  // Get current video ID
-  const videoId = getVideoId();
+  // Get current video ID (prefer stored from transcript, fallback to URL parsing)
+  const videoId = window.currentVideoId || getVideoId();
   if (!videoId) {
-    addChatMessage('Error: Could not get video ID', 'ai');
+    addChatMessage('Error: Could not get video ID. Please extract transcript first.', 'ai');
     return;
   }
   
@@ -128,14 +128,18 @@ async function sendChatMessage() {
     removeLoadingMessage();
     
     if (data.success) {
-      // For now, display the raw response - we can improve formatting later
-      const aiResponse = typeof data.raw_response === 'string' 
-        ? data.raw_response 
-        : JSON.stringify(data.raw_response, null, 2);
+      // Get the response from the server (Flask returns 'response' field)
+      const aiResponse = data.response || 'No response from AI';
       
       addChatMessage(aiResponse, 'ai');
+      
+      // Log additional info for debugging
+      console.log('Chat response data:', data);
+      if (data.timestamps && data.timestamps.length > 0) {
+        console.log('Timestamps found:', data.timestamps);
+      }
     } else {
-      addChatMessage(`Error: ${data.error}`, 'ai');
+      addChatMessage(`Error: ${data.error || 'Unknown error'}`, 'ai');
     }
     
   } catch (error) {
@@ -148,8 +152,10 @@ async function sendChatMessage() {
 // Function to add chat message
 function addChatMessage(message, sender) {
   const chatMessages = document.getElementById('chat-messages');
+  if (!chatMessages) return;
+  
   const messageDiv = document.createElement('div');
-  messageDiv.className = `${sender}-message`;
+  messageDiv.className = `chat-message ${sender}`;
   
   if (sender === 'user') {
     messageDiv.innerHTML = `
@@ -158,7 +164,15 @@ function addChatMessage(message, sender) {
         <p>${message}</p>
       </div>
     `;
+  } else if (sender === 'system') {
+    // System messages (status updates, processing info)
+    messageDiv.innerHTML = `
+      <div class="chat-content">
+        <p>${message}</p>
+      </div>
+    `;
   } else {
+    // AI messages
     messageDiv.innerHTML = `
       <div class="message-avatar">🤖</div>
       <div class="message-content">
@@ -174,8 +188,10 @@ function addChatMessage(message, sender) {
 // Function to add loading message (iOS-style bubbles)
 function addLoadingMessage() {
   const chatMessages = document.getElementById('chat-messages');
+  if (!chatMessages) return;
+  
   const loadingDiv = document.createElement('div');
-  loadingDiv.className = 'ai-message loading-message';
+  loadingDiv.className = 'chat-message ai loading-message';
   loadingDiv.id = 'loading-chat-message';
   loadingDiv.innerHTML = `
     <div class="message-avatar">🤖</div>
@@ -200,9 +216,12 @@ function removeLoadingMessage() {
   }
 }
 
-// Function to fetch transcript from Flask server
+// Function to fetch transcript from Flask server with progressive enhancement
 async function fetchTranscript(videoUrl) {
   try {
+    // Extract video ID for chat functionality
+    const videoId = extractVideoId(videoUrl);
+    
     const response = await fetch('http://localhost:8080/transcript', {
       method: 'POST',
       headers: {
@@ -214,7 +233,27 @@ async function fetchTranscript(videoUrl) {
     const data = await response.json();
     
     if (data.success) {
+      // Step 1: Display transcript immediately (whether cached or fresh)
       displayTranscript(data);
+      
+      // Step 2: Check chat status immediately
+      if (videoId) {
+        console.log('Checking chat status for video:', videoId);
+        await checkChatStatus(videoId);
+        
+        // Step 3: Start polling if RAG processing not complete
+        if (!data.rag_stored) {
+          console.log('RAG not ready, starting polling for video:', videoId);
+          startChatStatusPolling(videoId);
+        }
+      } else {
+        console.warn('Could not extract video ID from URL:', videoUrl);
+        updateChatAvailability({
+          available: false,
+          status: 'error',
+          message: 'Could not extract video ID from URL'
+        });
+      }
     } else {
       displayError(data.error || 'Failed to get transcript');
     }
@@ -224,12 +263,31 @@ async function fetchTranscript(videoUrl) {
   }
 }
 
+// Utility function to extract video ID from YouTube URL
+function extractVideoId(url) {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+    /youtube\.com\/watch\?.*v=([^&\n?#]+)/
+  ];
+  
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  
+  return null;
+}
+
 // Function to display transcript in sidebar
 function displayTranscript(data) {
   const transcriptTab = document.getElementById('transcript-tab');
   if (!transcriptTab) return;
   
-  const storageStatus = data.n8n_stored ? '✅ Stored in AI system' : '⚠️ Storage failed';
+  // Updated status display for optimized architecture
+  const cacheStatus = data.cached ? '🚀 Cached' : '🆕 Fresh';
+  const ragStatus = data.rag_stored ? '✅ Chat Ready' : '⏳ Processing...';
+  const extractionTime = data.extraction_time ? ` (${data.extraction_time.toFixed(1)}s)` : '';
+  const storageStatus = `${cacheStatus}${extractionTime} | ${ragStatus}`;
   
   transcriptTab.innerHTML = `
     <div class="transcript-header">
@@ -245,6 +303,9 @@ function displayTranscript(data) {
       `).join('')}
     </div>
   `;
+  
+  // Store video ID for chat functionality
+  window.currentVideoId = data.video_id;
   
   // Add click handlers for transcript items to jump to video time
   const transcriptItems = transcriptTab.querySelectorAll('.transcript-item');
@@ -280,10 +341,170 @@ function jumpToVideoTime(seconds) {
   }
 }
 
+// Function to check chat status for a video
+async function checkChatStatus(videoId) {
+  try {
+    const response = await fetch(`http://localhost:8080/chat/status/${videoId}`);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    
+    const status = await response.json();
+    console.log('Chat status:', status);
+    updateChatAvailability(status);
+    return status;
+  } catch (error) {
+    console.error('Error checking chat status:', error);
+    updateChatAvailability({
+      available: false,
+      status: 'error',
+      message: 'Could not check chat status. Server may be offline.'
+    });
+    return null;
+  }
+}
+
+// Function to update chat availability based on status
+function updateChatAvailability(status) {
+  const chatInput = document.getElementById('chat-input');
+  const sendButton = document.querySelector('.send-btn');
+  
+  if (!chatInput) return;
+  
+  if (status.available && status.status === 'ready') {
+    // Enable chat
+    chatInput.disabled = false;
+    chatInput.placeholder = "Ask about this video...";
+    if (sendButton) sendButton.disabled = false;
+    
+    // Add status message if this is a transition to ready
+    if (!window.chatWasReady) {
+      addChatMessage('🎉 Chat is now ready! You can ask questions about this video.', 'system');
+      window.chatWasReady = true;
+    }
+  } else {
+    // Disable chat with appropriate message
+    chatInput.disabled = true;
+    if (sendButton) sendButton.disabled = true;
+    
+    switch (status.status) {
+      case 'processing':
+        chatInput.placeholder = '⏳ Processing transcript for AI chat...';
+        if (!window.processingMessageShown) {
+          const retryMinutes = Math.round((status.retry_after || 120) / 60);
+          addChatMessage(
+            `🔄 ${status.message || 'Transcript is being processed for AI chat.'} Check back in ${retryMinutes} minutes or click the retry button.`,
+            'system'
+          );
+          addRetryButton();
+          window.processingMessageShown = true;
+        }
+        break;
+        
+      case 'not_found':
+        chatInput.placeholder = '❌ Video not found. Extract transcript first.';
+        addChatMessage('❌ Video transcript not found. Please click the "Get Transcript" button first.', 'system');
+        break;
+        
+      case 'error':
+      case 'rag_unavailable':
+        chatInput.placeholder = '⚠️ Chat temporarily unavailable';
+        addChatMessage(`⚠️ ${status.message || 'Chat is temporarily unavailable.'}`, 'system');
+        break;
+        
+      default:
+        chatInput.placeholder = '⏳ Chat not ready yet...';
+        addChatMessage('⏳ Chat is not ready yet. Please wait for transcript processing.', 'system');
+    }
+  }
+}
+
+// Function to add retry button for chat status
+function addRetryButton() {
+  const chatMessages = document.getElementById('chat-messages');
+  if (!chatMessages) return;
+  
+  // Check if retry button already exists
+  if (document.getElementById('chat-retry-btn')) return;
+  
+  const retryDiv = document.createElement('div');
+  retryDiv.className = 'chat-message system';
+  retryDiv.innerHTML = `
+    <div class="chat-content">
+      <button id="chat-retry-btn" class="retry-chat-btn">🔄 Check Chat Status</button>
+    </div>
+  `;
+  
+  chatMessages.appendChild(retryDiv);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  
+  // Add click handler for retry button
+  document.getElementById('chat-retry-btn').addEventListener('click', () => {
+    if (window.currentVideoId) {
+      checkChatStatus(window.currentVideoId);
+    }
+  });
+}
+
+// Chat status polling mechanism
+let chatStatusPolling = null;
+
+function startChatStatusPolling(videoId) {
+  // Clear any existing polling
+  if (chatStatusPolling) {
+    clearInterval(chatStatusPolling);
+    chatStatusPolling = null;
+  }
+  
+  console.log('Starting chat status polling for video:', videoId);
+  
+  // Poll every 15 seconds (reasonable interval)
+  chatStatusPolling = setInterval(async () => {
+    console.log('Polling chat status for video:', videoId);
+    
+    try {
+      const status = await checkChatStatus(videoId);
+      
+      if (status && status.available && status.status === 'ready') {
+        console.log('Chat is now ready, stopping polling');
+        clearInterval(chatStatusPolling);
+        chatStatusPolling = null;
+      }
+    } catch (error) {
+      console.error('Error during polling:', error);
+      // Continue polling despite errors
+    }
+  }, 15000); // 15 seconds
+  
+  // Auto-stop polling after 10 minutes (40 polls) to prevent infinite polling
+  setTimeout(() => {
+    if (chatStatusPolling) {
+      console.log('Stopping chat status polling after timeout');
+      clearInterval(chatStatusPolling);
+      chatStatusPolling = null;
+    }
+  }, 600000); // 10 minutes
+}
+
+function stopChatStatusPolling() {
+  if (chatStatusPolling) {
+    console.log('Manually stopping chat status polling');
+    clearInterval(chatStatusPolling);
+    chatStatusPolling = null;
+  }
+}
+
 // Function to retry transcript fetching
 function retryTranscript() {
   const videoUrl = window.location.href;
   const transcriptTab = document.getElementById('transcript-tab');
+  
+  // Reset chat state
+  window.chatWasReady = false;
+  window.processingMessageShown = false;
+  stopChatStatusPolling();
+  
   if (transcriptTab) {
     transcriptTab.innerHTML = `
       <div class="loading-state">

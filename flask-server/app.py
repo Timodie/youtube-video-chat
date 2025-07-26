@@ -3,10 +3,10 @@ from flask_cors import CORS
 import re
 import requests
 import subprocess
-import json
 import tempfile
 import os
 import asyncio
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -205,57 +205,64 @@ def health_check():
     """Health check endpoint"""
     return jsonify({"status": "healthy", "message": "Flask server is running"})
 
-def send_transcript_to_n8n(video_id, video_title, video_url, channel, transcript_data):
-    """Send transcript data to n8n for processing and storage"""
+
+def check_transcript_cache(video_id):
+    """Check if transcript exists in cache table."""
     try:
-        n8n_payload = {
-            "video_id": video_id,
-            "title": video_title,
-            "url": video_url,
-            "channel": channel,
-            "transcript": transcript_data
-        }
-
-        print(n8n_payload)
-
-        print(f"\n📤 SENDING TRANSCRIPT TO N8N")
-        print(f"   Video ID: {video_id}")
-        print(f"   Title: {video_title}")
-        print(f"   URL: {video_url}")
-        print(f"   Channel: {channel}")
-        print(f"   Transcript chunks: {len(transcript_data)}")
-        print(f"   Endpoint: https://taddaifor.app.n8n.cloud/webhook/youtube-transcript")
-        print(f"   Payload size: {len(json.dumps(n8n_payload))} bytes")
-
-        response = requests.post(
-            "https://taddaifor.app.n8n.cloud/webhook/youtube-transcript",
-            json=n8n_payload,
-            headers={
-                "Content-Type": "application/json",
-                "RAGHeader": "RAGHeader"
-            },
-            timeout=30
-        )
-
-        print(f"\n📥 N8N TRANSCRIPT RESPONSE")
-        print(f"   Status Code: {response.status_code}")
-        print(f"   Response Headers: {dict(response.headers)}")
-        print(f"   Response Body: {response.text}")
-
-        if response.status_code == 200:
-            print(f"✅ Successfully sent transcript to n8n for video {video_id}")
-            return True
-        else:
-            print(f"❌ Failed to send transcript to n8n: {response.status_code} {response.text}")
-            return False
-
+        if not rag_integration:
+            return None
+            
+        result = rag_integration.deps.supabase.from_('youtube_transcripts_cache') \
+            .select('*') \
+            .eq('video_id', video_id) \
+            .execute()
+        
+        if result.data and len(result.data) > 0:
+            cached = result.data[0]
+            print(f"✅ Found cached transcript for video {video_id}")
+            return {
+                "video_id": cached["video_id"],
+                "title": cached["title"],
+                "url": cached["url"],
+                "language": cached.get("language", "English"),
+                "language_code": cached.get("language_code", "en"),
+                "transcript": cached["transcript_data"],
+                "cached": True
+            }
+        return None
     except Exception as e:
-        print(f"❌ Error sending transcript to n8n: {e}")
+        print(f"⚠️ Error checking transcript cache: {e}")
+        return None
+
+def store_transcript_cache(video_id, video_url, video_title, transcript_data):
+    """Store transcript in cache table."""
+    try:
+        if not rag_integration:
+            return False
+            
+        data = {
+            "video_id": video_id,
+            "url": video_url,
+            "title": video_title,
+            "language": "English",
+            "language_code": "en",
+            "transcript_data": transcript_data
+        }
+        
+        # Use upsert to handle duplicates gracefully
+        rag_integration.deps.supabase.from_('youtube_transcripts_cache') \
+            .upsert(data) \
+            .execute()
+        
+        print(f"✅ Stored transcript in cache for video {video_id}")
+        return True
+    except Exception as e:
+        print(f"⚠️ Error storing transcript cache: {e}")
         return False
 
 @app.route('/transcript', methods=['POST'])
 def get_transcript():
-    """Get transcript for a YouTube video and send to n8n"""
+    """Get transcript for a YouTube video with smart caching and instant returns"""
     try:
         data = request.get_json()
         youtube_url = data.get('url')
@@ -268,16 +275,66 @@ def get_transcript():
         if not video_id:
             return jsonify({"error": "Could not extract video ID from URL"}), 400
 
-        # Get video title
+        print(f"📋 Processing transcript request for video {video_id}")
+
+        # Step 1: Check cache first (instant return if exists)
+        cached_transcript = check_transcript_cache(video_id)
+        if cached_transcript:
+            print(f"🚀 Returning cached transcript for video {video_id} (instant response)")
+            
+            # Check RAG availability and trigger ingestion if needed
+            rag_stored = False
+            if rag_integration:
+                try:
+                    availability = asyncio.run(rag_integration.check_video_availability(video_id))
+                    rag_stored = availability.get("available", False)
+                    
+                    # If RAG chunks don't exist, trigger background ingestion
+                    if not rag_stored:
+                        print(f"🔄 Cached transcript found but RAG chunks missing for video {video_id}")
+                        print(f"   Triggering background RAG ingestion")
+                        try:
+                            rag_stored = asyncio.run(rag_integration.ingest_transcript(
+                                video_id=video_id,
+                                video_url=cached_transcript["url"],
+                                video_title=cached_transcript["title"],
+                                transcript_data=cached_transcript["transcript"]
+                            ))
+                            print(f"{'✅' if rag_stored else '⚠️'} Background RAG ingest {'succeeded' if rag_stored else 'failed'} for cached video {video_id}")
+                        except Exception as e:
+                            print(f"❌ Background RAG ingest error for cached video {video_id}: {e}")
+                            rag_stored = False
+                except:
+                    rag_stored = False
+            
+            response = {
+                "success": True,
+                "video_id": video_id,
+                "title": cached_transcript["title"],
+                "url": cached_transcript["url"],
+                "language": cached_transcript["language"],
+                "language_code": cached_transcript["language_code"],
+                "transcript": cached_transcript["transcript"],
+                "rag_stored": rag_stored,
+                "cached": True,
+                "extraction_time": 0  # Instant from cache
+            }
+            return jsonify(response)
+
+        # Step 2: Extract transcript with yt-dlp (30-40 seconds)
+        print(f"🔄 No cache found, extracting transcript for video {video_id}")
+        start_time = time.time()
+        
         video_title = get_video_title(video_id)
-
-        # Get transcript using yt-dlp
         transcript_data = get_transcript_with_ytdlp(youtube_url, video_id)
+        
+        extraction_time = time.time() - start_time
+        print(f"✅ Transcript extracted in {extraction_time:.2f} seconds")
 
-        # Extract channel name (simplified - you can enhance this)
-        channel = "Unknown Channel"  # You can enhance this by parsing the YouTube page
+        # Step 3: Store in cache immediately (for future requests)
+        store_transcript_cache(video_id, youtube_url, video_title, transcript_data)
 
-        # Try RAG ingest (non-blocking) - new direct approach
+        # Step 4: Try RAG ingest (with duplicate detection)
         rag_stored = False
         if rag_integration:
             try:
@@ -295,14 +352,7 @@ def get_transcript():
         else:
             print(f"⚠️ RAG integration not available for video {video_id}")
 
-        # Fallback: Also try n8n for backward compatibility (optional)
-        n8n_success = False
-        try:
-            n8n_success = send_transcript_to_n8n(video_id, video_title, youtube_url, channel, transcript_data)
-        except Exception as e:
-            print(f"⚠️ n8n fallback failed: {e}")
-
-        # Return structured response (always succeeds if transcript extraction worked)
+        # Step 5: Return structured response (always succeeds if transcript extraction worked)
         response = {
             "success": True,
             "video_id": video_id,
@@ -311,19 +361,91 @@ def get_transcript():
             "language": "English",
             "language_code": "en",
             "transcript": transcript_data,
-            "rag_stored": rag_stored,      # New RAG storage status
-            "n8n_stored": n8n_success      # Legacy n8n status
+            "rag_stored": rag_stored,
+            "cached": False,
+            "extraction_time": extraction_time
         }
 
         return jsonify(response)
 
     except Exception as e:
         error_message = str(e)
-        print(f"Error getting transcript: {error_message}")
+        print(f"❌ Error getting transcript: {error_message}")
 
         return jsonify({
             "success": False,
             "error": error_message
+        }), 500
+
+@app.route('/chat/status/<video_id>', methods=['GET'])
+def get_chat_status(video_id):
+    """Check if chat is available for a specific video (RAG processing complete)"""
+    try:
+        print(f"📊 Checking chat status for video {video_id}")
+        
+        if not rag_integration:
+            return jsonify({
+                "available": False,
+                "status": "rag_unavailable",
+                "message": "RAG integration not available",
+                "video_id": video_id
+            }), 503
+
+        # Check if video has processed chunks
+        try:
+            availability = asyncio.run(rag_integration.check_video_availability(video_id))
+            
+            if availability["available"]:
+                status_response = {
+                    "available": True,
+                    "status": "ready",
+                    "chunk_count": availability["chunk_count"],
+                    "message": f"Chat ready - {availability['chunk_count']} chunks processed",
+                    "video_id": video_id
+                }
+                print(f"✅ Chat ready for video {video_id} ({availability['chunk_count']} chunks)")
+            else:
+                # Check if transcript is cached (processing may be in progress)
+                cached_transcript = check_transcript_cache(video_id)
+                if cached_transcript:
+                    status_response = {
+                        "available": False,
+                        "status": "processing",
+                        "chunk_count": 0,
+                        "message": "Transcript available, RAG processing in progress. Check back in 2-3 minutes.",
+                        "video_id": video_id,
+                        "retry_after": 120  # Suggest retry in 2 minutes
+                    }
+                    print(f"⏳ Video {video_id} transcript cached, RAG processing in progress")
+                else:
+                    status_response = {
+                        "available": False,
+                        "status": "not_found",
+                        "chunk_count": 0,
+                        "message": "Video not found. Please extract transcript first.",
+                        "video_id": video_id
+                    }
+                    print(f"❌ Video {video_id} not found in system")
+            
+            return jsonify(status_response)
+            
+        except Exception as e:
+            print(f"❌ Error checking video availability: {e}")
+            return jsonify({
+                "available": False,
+                "status": "error",
+                "message": f"Error checking status: {str(e)}",
+                "video_id": video_id
+            }), 500
+
+    except Exception as e:
+        error_message = str(e)
+        print(f"❌ Error in chat status endpoint: {error_message}")
+        return jsonify({
+            "available": False,
+            "status": "error",
+            "message": "Internal server error",
+            "video_id": video_id
         }), 500
 
 @app.route('/chat', methods=['POST'])
@@ -365,53 +487,15 @@ async def chat_with_video():
                     })
                 else:
                     print(f"⚠️ RAG agent returned error: {result.get('error', 'Unknown error')}")
-                    # Continue to n8n fallback
+                    pass
                     
             except Exception as e:
                 print(f"❌ RAG agent failed: {e}")
-                # Continue to n8n fallback
 
-        # # Fallback to n8n (if RAG failed or not available) - COMMENTED OUT FOR TESTING
-        # try:
-        #     print(f"🔄 Falling back to n8n for video {video_id}")
-        #     
-        #     n8n_payload = {
-        #         "chatInput": chat_input,
-        #         "video_id": video_id,
-        #         "sessionId": session_id
-        #     }
-
-        #     response = requests.post(
-        #         "https://taddaifor.app.n8n.cloud/webhook/youtube-chat",
-        #         json=n8n_payload,
-        #         headers={
-        #             "Content-Type": "application/json",
-        #             "RAGHeader": "RAGHeader"
-        #         },
-        #         timeout=30
-        #     )
-
-        #     print(f"📥 n8n response: {response.status_code}")
-
-        #     if response.status_code == 200:
-        #         print(f"✅ n8n fallback successful for video {video_id}")
-        #         return jsonify({
-        #             "success": True,
-        #             "response": response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text,
-        #             "video_id": video_id,
-        #             "method": "n8n_fallback",
-        #             "timestamps": []  # n8n may not provide structured timestamps
-        #         })
-        #     else:
-        #         print(f"❌ n8n fallback failed: {response.status_code}")
-        #         
-        # except Exception as e:
-        #     print(f"❌ n8n fallback error: {e}")
-
-        # RAG only mode - no fallback
+        # RAG-only mode - no fallback
         return jsonify({
             "success": False,
-            "error": "RAG agent failed and n8n fallback is disabled for testing.",
+            "error": "RAG agent failed. Please ensure video transcript has been processed.",
             "video_id": video_id
         }), 500
 
@@ -431,6 +515,7 @@ if __name__ == '__main__':
     print("Endpoints:")
     print("  - Health check: GET http://localhost:8080/health")
     print("  - Get transcript: POST http://localhost:8080/transcript")
+    print("  - Chat status: GET http://localhost:8080/chat/status/<video_id>")
     print("  - Chat with video: POST http://localhost:8080/chat")
-    print("Integrated with n8n production endpoints")
+    print("Direct RAG architecture - no external dependencies")
     app.run(debug=True, host='0.0.0.0', port=8080)

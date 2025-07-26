@@ -594,3 +594,80 @@
 [dark] .typing-dot {
   background: #aaa;
 }
+
+/* Chat retry button and system messages */
+.retry-chat-btn {
+  background-color: #1976d2;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 16px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background-color 0.2s;
+  margin-top: 8px;
+}
+
+.retry-chat-btn:hover {
+  background-color: #1565c0;
+}
+
+.retry-chat-btn:active {
+  background-color: #0d47a1;
+}
+
+/* System chat messages */
+.chat-message.system {
+  align-self: center;
+}
+
+.chat-message.system .message-content {
+  background-color: #f5f5f5;
+  color: #424242;
+  font-style: italic;
+  border-left: 4px solid #2196f3;
+  border-radius: 8px;
+  text-align: center;
+  max-width: 320px;
+}
+
+/* Disabled chat input styling */
+#chat-input:disabled {
+  background-color: #f5f5f5;
+  color: #757575;
+  cursor: not-allowed;
+}
+
+.send-btn:disabled,
+#send-btn:disabled {
+  background-color: #e0e0e0;
+  color: #bdbdbd;
+  cursor: not-allowed;
+}
+
+/* Dark mode for new elements */
+[dark] .retry-chat-btn {
+  background-color: #1976d2;
+}
+
+[dark] .retry-chat-btn:hover {
+  background-color: #1565c0;
+}
+
+[dark] .chat-message.system .message-content {
+  background-color: #333;
+  color: #e0e0e0;
+  border-left-color: #2196f3;
+}
+
+[dark] #chat-input:disabled {
+  background-color: #333;
+  color: #757575;
+}
+
+[dark] .send-btn:disabled,
+[dark] #send-btn:disabled {
+  background-color: #444;
+  color: #666;
+}
