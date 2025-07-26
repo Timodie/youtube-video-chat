@@ -145,7 +145,8 @@ def parse_vtt_content(vtt_content):
                         "start": start_time_str,
                         "end": end_time_str,
                         "text": text,
-                        "start_seconds": start_seconds
+                        "start_seconds": start_seconds,
+                        "end_seconds": end_seconds
                     })
 
         i += 1
