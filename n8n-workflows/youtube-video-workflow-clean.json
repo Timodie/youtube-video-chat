@@ -1,0 +1,543 @@
+{
+  "name": "YouTube Video Transcript RAG - Clean",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "youtube-transcript",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "id": "webhook-transcript",
+      "name": "YouTube Transcript Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        400
+      ],
+      "webhookId": "youtube-transcript-webhook",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "H19fdZlGooXPxNYM",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "video_id",
+              "value": "={{ $json.body.video_id }}",
+              "type": "string"
+            },
+            {
+              "id": "2", 
+              "name": "video_title",
+              "value": "={{ $json.body.title }}",
+              "type": "string"
+            },
+            {
+              "id": "3",
+              "name": "video_url", 
+              "value": "={{ $json.body.url }}",
+              "type": "string"
+            },
+            {
+              "id": "4",
+              "name": "channel",
+              "value": "={{ $json.body.channel || 'Unknown' }}",
+              "type": "string"
+            },
+            {
+              "id": "5",
+              "name": "transcript",
+              "value": "={{ $json.body.transcript }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-video-data",
+      "name": "Set Video Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -600,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM youtube_transcripts WHERE metadata->>'video_id' = '{{ $json.video_id }}';",
+        "options": {}
+      },
+      "id": "delete-old-chunks",
+      "name": "Delete Old Chunks",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -400,
+        400
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "v67HOeuzxclyCXHP",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Process transcript into chunks with timestamps\nconst transcript = $('Set Video Data').first().json.transcript;\nconst video_id = $('Set Video Data').first().json.video_id;\nconst video_title = $('Set Video Data').first().json.video_title;\nconst video_url = $('Set Video Data').first().json.video_url;\nconst channel = $('Set Video Data').first().json.channel;\n\nif (!transcript || !Array.isArray(transcript)) {\n  throw new Error('Invalid transcript data');\n}\n\n// Group transcript entries into chunks (10-15 seconds)\nconst chunks = [];\nlet currentChunk = [];\nlet chunkStartTime = null;\nlet chunkStartSeconds = null;\n\nfor (let i = 0; i < transcript.length; i++) {\n  const entry = transcript[i];\n  \n  if (currentChunk.length === 0) {\n    chunkStartTime = entry.start;\n    chunkStartSeconds = entry.start_seconds;\n  }\n  \n  currentChunk.push(entry);\n  \n  const shouldCreateChunk = (\n    currentChunk.length >= 4 || \n    (entry.start_seconds - chunkStartSeconds) >= 15 ||\n    i === transcript.length - 1\n  );\n  \n  if (shouldCreateChunk) {\n    const chunkText = currentChunk.map(e => e.text).join(' ');\n    const endTime = currentChunk[currentChunk.length - 1].end;\n    const endSeconds = currentChunk[currentChunk.length - 1].start_seconds + 5;\n    \n    chunks.push({\n      content: chunkText,\n      metadata: {\n        video_id: video_id,\n        video_title: video_title,\n        video_url: video_url,\n        channel: channel,\n        start_time: chunkStartTime,\n        end_time: endTime,\n        start_seconds: chunkStartSeconds,\n        end_seconds: endSeconds\n      }\n    });\n    \n    currentChunk = [];\n  }\n}\n\nreturn chunks.map(chunk => ({ json: chunk }));"
+      },
+      "id": "process-chunks",
+      "name": "Process Chunks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "tableName": {
+          "__rl": true,
+          "value": "youtube_transcripts",
+          "mode": "list",
+          "cachedResultName": "youtube_transcripts"
+        },
+        "options": {
+          "queryName": "match_youtube_transcripts"
+        }
+      },
+      "id": "insert-vectorstore",
+      "name": "Insert Vectorstore",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "typeVersion": 1,
+      "position": [
+        0,
+        400
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "WIcnN5aCv4TxfT8c",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "id": "embeddings-storage",
+      "name": "Embeddings Storage", 
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "GSb9U9LDxR4GE1Km",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "youtube-chat",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "id": "webhook-chat",
+      "name": "YouTube Chat Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        600
+      ],
+      "webhookId": "youtube-chat-webhook",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "H19fdZlGooXPxNYM",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "chatInput",
+              "value": "={{ $json.body.chatInput }}",
+              "type": "string"
+            },
+            {
+              "id": "2",
+              "name": "sessionId",
+              "value": "={{ $json.body.sessionId || $json.body.video_id }}",
+              "type": "string"
+            },
+            {
+              "id": "3",
+              "name": "video_id",
+              "value": "={{ $json.body.video_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-chat-data",
+      "name": "Set Chat Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -600,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.chatInput }}",
+        "options": {
+          "systemMessage": "You are a helpful video assistant that answers questions about YouTube video content using the video's transcript. You are analyzing a single video and should ONLY reference content from this specific video.\\n\\n**Your Knowledge Base:**\\n- Video transcript chunks from the current video only (video_id: {{ $json.video_id }})\\n- Video metadata (title, channel, duration)\\n- Timestamp information for precise navigation\\n\\n**Available Tools:**\\n- Performing RAG queries on youtube_transcripts (filtered by current video_id)\\n- Retrieving full transcript sections when needed\\n\\n**Answering Strategy:**\\n1. Always search the video transcript first using RAG queries\\n2. If the question isn't covered in the transcript, clearly state \\\"This topic wasn't discussed in this video\\\"\\n3. Never guess or provide information not found in the video\\n4. Focus on what the speaker actually said, not external knowledge\\n\\n**Response Style:**\\n- **Brief Mode (default):** Answer concisely in 1–2 sentences with the key information from the video\\n- **Detailed Mode:** When asked to \\\"explain,\\\" \\\"elaborate,\\\" or \\\"tell me more,\\\" provide fuller context from the video (3–5 sentences)\\n- **Quote Mode:** When appropriate, include direct quotes from the speaker\\n\\n**Important Guidelines:**\\n- Only discuss content from THIS video\\n- Always provide timestamps so users can jump to relevant moments\\n- If unsure about timing, provide the approximate timestamp range\\n- Distinguish between what the speaker said vs. visual content (if mentioned)\\n- When quoting directly, use quotation marks: The speaker said \\\"exact quote here\\\"\\n\\nYour goal is to help users understand and navigate this specific video's content efficiently."
+        }
+      },
+      "id": "ai-agent",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.6,
+      "position": [
+        -400,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "chat-model",
+      "name": "Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        500
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "GSb9U9LDxR4GE1Km",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdKey": "sessionId"
+      },
+      "id": "chat-memory",
+      "name": "Chat Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        700
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "v67HOeuzxclyCXHP",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolName": "youtube_transcripts",
+        "toolDescription": "Search for information in this YouTube video's transcript. Always filter by the current video_id.",
+        "tableName": {
+          "__rl": true,
+          "value": "youtube_transcripts",
+          "mode": "list",
+          "cachedResultName": "youtube_transcripts"
+        },
+        "options": {
+          "queryName": "match_youtube_transcripts",
+          "filter": "={{ {\\\"video_id\\\": $json.video_id} }}"
+        }
+      },
+      "id": "transcript-search",
+      "name": "Transcript Search",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "typeVersion": 1,
+      "position": [
+        -200,
+        600
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "WIcnN5aCv4TxfT8c",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "id": "embeddings-search",
+      "name": "Embeddings Search",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1,
+      "position": [
+        -200,
+        700
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "GSb9U9LDxR4GE1Km",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\\n  \\\"outputText\\\": \\\"The speaker explained that project delays were caused by supplier issues and budget constraints, but the team adapted quickly to find alternative solutions.\\\",\\n  \\\"sources\\\": [\\n    {\\n      \\\"timestamps\\\": [\\\"00:12:45–00:13:15\\\", \\\"00:18:30–00:19:05\\\"],\\n      \\\"videoTitle\\\": \\\"Project Management Best Practices\\\",\\n      \\\"videoUrl\\\": \\\"https://www.youtube.com/watch?v=abc123\\\"\\n    }\\n  ]\\n}"
+      },
+      "id": "output-parser",
+      "name": "Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        -200,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Create YouTube transcripts table\nCREATE TABLE IF NOT EXISTS youtube_transcripts (\n  id bigserial primary key,\n  content text, -- transcript chunk content\n  metadata jsonb, -- video_id, timestamps, title, etc\n  embedding vector(1536), -- OpenAI embeddings\n  created_at timestamp default now()\n);\n\n-- Create B-tree index on video_id for fast filtering\nCREATE INDEX IF NOT EXISTS idx_youtube_transcripts_video_id \nON youtube_transcripts USING btree ((metadata->>'video_id'));\n\n-- Create index on created_at for cleanup\nCREATE INDEX IF NOT EXISTS idx_youtube_transcripts_created_at \nON youtube_transcripts (created_at);\n\n-- Create function to search YouTube transcripts by video (Supabase format)\nCREATE OR REPLACE FUNCTION match_youtube_transcripts (\n  filter jsonb DEFAULT '{}',\n  match_count int DEFAULT 10,\n  query_embedding vector(1536)\n) RETURNS TABLE (\n  id bigint,\n  content text,\n  metadata jsonb,\n  similarity float\n)\nLANGUAGE plpgsql\nAS $$\nBEGIN\n  RETURN QUERY\n  SELECT\n    youtube_transcripts.id,\n    youtube_transcripts.content,\n    youtube_transcripts.metadata,\n    1 - (youtube_transcripts.embedding <=> query_embedding) as similarity\n  FROM youtube_transcripts\n  WHERE \n    metadata @> filter\n  ORDER BY youtube_transcripts.embedding <=> query_embedding\n  LIMIT match_count;\nEND;\n$$;\n\nSELECT 'YouTube tables created successfully' as status;",
+        "options": {}
+      },
+      "id": "create-tables",
+      "name": "Create Tables",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -800,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "v67HOeuzxclyCXHP",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "YouTube Transcript Webhook": {
+      "main": [
+        [
+          {
+            "node": "Set Video Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Video Data": {
+      "main": [
+        [
+          {
+            "node": "Delete Old Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Old Chunks": {
+      "main": [
+        [
+          {
+            "node": "Process Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Chunks": {
+      "main": [
+        [
+          {
+            "node": "Insert Vectorstore",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Vectorstore": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Storage": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Insert Vectorstore",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube Chat Webhook": {
+      "main": [
+        [
+          {
+            "node": "Set Chat Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Chat Data": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcript Search": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Search": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Transcript Search",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "clean-youtube-workflow",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "id": "YouTubeTranscriptRAGClean",
+  "tags": ["youtube", "transcript", "rag", "video-chat"]
+}
