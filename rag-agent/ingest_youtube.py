@@ -159,6 +159,8 @@ async def insert_chunk(chunk: ProcessedChunk):
             "metadata": chunk.metadata,
             "embedding": chunk.embedding
         }
+        print(f"Attempting to Insert chunk {chunk.chunk_number} for video {chunk.video_id}")
+
         result = supabase.table("youtube_transcript_pages").insert(data).execute()
         print(f"Inserted chunk {chunk.chunk_number} for video {chunk.video_id}")
         return result
@@ -167,7 +169,7 @@ async def insert_chunk(chunk: ProcessedChunk):
         return None
 
 async def process_and_store_transcript(video_id: str, video_url: str, video_title: str, transcript_data: List[Dict]):
-    """Process a YouTube transcript and store its chunks in parallel.
+    """Process a YouTube transcript and store its chunks in batches to avoid rate limits.
 
     Args:
         video_id: YouTube video ID
@@ -175,27 +177,72 @@ async def process_and_store_transcript(video_id: str, video_url: str, video_titl
         video_title: Video title
         transcript_data: List of transcript entries from VTT parsing
     """
-    # Split transcript into semantic chunks
-    chunks = chunk_vtt_transcript(transcript_data)
+    try:
+        # Split transcript into semantic chunks
+        chunks = chunk_vtt_transcript(transcript_data)
+        print(f"Processing {len(chunks)} chunks for video {video_id}")
 
-    print(f"Processing {len(chunks)} chunks for video {video_id}")
+        # Process chunks in smaller batches to avoid overwhelming OpenAI API
+        batch_size = 50  # Process 50 chunks at a time
+        total_results = []
+        
+        for batch_start in range(0, len(chunks), batch_size):
+            batch_end = min(batch_start + batch_size, len(chunks))
+            batch_chunks = chunks[batch_start:batch_end]
+            
+            print(f"Processing batch {batch_start//batch_size + 1}/{(len(chunks) + batch_size - 1)//batch_size}: chunks {batch_start}-{batch_end-1}")
+            
+            try:
+                # Process this batch of chunks in parallel
+                tasks = [
+                    process_chunk(chunk_data, batch_start + i, video_id, video_url, video_title)
+                    for i, chunk_data in enumerate(batch_chunks)
+                ]
+                processed_chunks = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Check for exceptions in processing
+                successful_chunks = []
+                for i, chunk in enumerate(processed_chunks):
+                    if isinstance(chunk, Exception):
+                        print(f"❌ Error processing chunk {batch_start + i}: {chunk}")
+                    else:
+                        successful_chunks.append(chunk)
+                
+                print(f"Successfully processed {len(successful_chunks)}/{len(batch_chunks)} chunks in batch")
+                
+                # Store successful chunks in parallel
+                if successful_chunks:
+                    insert_tasks = [insert_chunk(chunk) for chunk in successful_chunks]
+                    batch_results = await asyncio.gather(*insert_tasks, return_exceptions=True)
+                    
+                    # Check insertion results
+                    successful_inserts = 0
+                    for i, result in enumerate(batch_results):
+                        if isinstance(result, Exception):
+                            print(f"❌ Error inserting chunk: {result}")
+                        elif result is not None:
+                            successful_inserts += 1
+                    
+                    print(f"Successfully inserted {successful_inserts}/{len(successful_chunks)} chunks in batch")
+                    total_results.extend(batch_results)
+                
+                # Small delay between batches to be nice to APIs
+                if batch_end < len(chunks):
+                    await asyncio.sleep(1)
+                    
+            except Exception as e:
+                print(f"❌ Error processing batch {batch_start}-{batch_end-1}: {e}")
+                continue
 
-    # Process chunks in parallel
-    tasks = [
-        process_chunk(chunk_data, i, video_id, video_url, video_title)
-        for i, chunk_data in enumerate(chunks)
-    ]
-    processed_chunks = await asyncio.gather(*tasks)
-
-    # Store chunks in parallel
-    insert_tasks = [
-        insert_chunk(chunk)
-        for chunk in processed_chunks
-    ]
-    results = await asyncio.gather(*insert_tasks)
-
-    print(f"Successfully stored {len(results)} chunks for video {video_id}")
-    return results
+        successful_results = [r for r in total_results if r is not None and not isinstance(r, Exception)]
+        print(f"✅ Successfully stored {len(successful_results)} total chunks for video {video_id}")
+        return successful_results
+        
+    except Exception as e:
+        print(f"❌ Critical error in process_and_store_transcript: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
 
 
 

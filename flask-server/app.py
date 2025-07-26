@@ -7,6 +7,8 @@ import tempfile
 import os
 import asyncio
 import time
+import traceback
+import threading
 from pathlib import Path
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -186,9 +188,12 @@ def parse_vtt_content(vtt_content):
     return transcript_data
 
 def time_str_to_seconds(time_str):
-    """Convert time string (HH:MM:SS.mmm) to seconds"""
+    """Convert time string (HH:MM:SS.mmm) to seconds, handling VTT alignment attributes"""
     try:
-        parts = time_str.split(':')
+        # Clean VTT alignment attributes (e.g., "00:00:02.240 align:start position:0%")
+        clean_time = time_str.split(' ')[0]  # Take only the time part before any spaces
+        
+        parts = clean_time.split(':')
         hours = int(parts[0])
         minutes = int(parts[1])
         seconds_parts = parts[2].split('.')
@@ -197,13 +202,50 @@ def time_str_to_seconds(time_str):
 
         total_seconds = hours * 3600 + minutes * 60 + seconds + milliseconds / 1000
         return total_seconds
-    except:
+    except Exception as e:
+        print(f"⚠️ Error parsing time string '{time_str}': {e}")
         return 0
 
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return jsonify({"status": "healthy", "message": "Flask server is running"})
+
+@app.route('/admin/clear-cache/<video_id>', methods=['DELETE'])
+def clear_cache(video_id):
+    """Admin endpoint to clear cache for a specific video"""
+    try:
+        if not rag_integration:
+            return jsonify({"error": "RAG integration not available"}), 503
+            
+        # Clear from cache table
+        cache_result = rag_integration.deps.supabase.from_('youtube_transcripts_cache') \
+            .delete().eq('video_id', video_id).execute()
+        
+        # Clear any existing chunks
+        chunks_result = rag_integration.deps.supabase.from_('youtube_transcript_pages') \
+            .delete().eq('video_id', video_id).execute()
+        
+        cache_count = len(cache_result.data) if cache_result.data else 0
+        chunks_count = len(chunks_result.data) if chunks_result.data else 0
+        
+        print(f"🗑️ Cleared cache for video {video_id}: {cache_count} cache entries, {chunks_count} chunks")
+        
+        return jsonify({
+            "success": True,
+            "video_id": video_id,
+            "cache_cleared": cache_count,
+            "chunks_cleared": chunks_count,
+            "message": f"Cache cleared for video {video_id}"
+        })
+        
+    except Exception as e:
+        print(f"❌ Error clearing cache for video {video_id}: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "video_id": video_id
+        }), 500
 
 
 def check_transcript_cache(video_id):
@@ -292,18 +334,35 @@ def get_transcript():
                     # If RAG chunks don't exist, trigger background ingestion
                     if not rag_stored:
                         print(f"🔄 Cached transcript found but RAG chunks missing for video {video_id}")
-                        print(f"   Triggering background RAG ingestion")
-                        try:
-                            rag_stored = asyncio.run(rag_integration.ingest_transcript(
-                                video_id=video_id,
-                                video_url=cached_transcript["url"],
-                                video_title=cached_transcript["title"],
-                                transcript_data=cached_transcript["transcript"]
-                            ))
-                            print(f"{'✅' if rag_stored else '⚠️'} Background RAG ingest {'succeeded' if rag_stored else 'failed'} for cached video {video_id}")
-                        except Exception as e:
-                            print(f"❌ Background RAG ingest error for cached video {video_id}: {e}")
-                            rag_stored = False
+                        print(f"   Starting background RAG ingestion (non-blocking)")
+                        
+                        
+                        def background_rag_ingest():
+                            try:
+                                print(f"🔄 Background thread started for cached video {video_id}")
+                                print(f"   Thread ID: {threading.current_thread().ident}")
+                                print(f"   Transcript entries: {len(cached_transcript['transcript'])}")
+                                
+                                result = asyncio.run(rag_integration.ingest_transcript(
+                                    video_id=video_id,
+                                    video_url=cached_transcript["url"],
+                                    video_title=cached_transcript["title"],
+                                    transcript_data=cached_transcript["transcript"]
+                                ))
+                                print(f"{'✅' if result else '⚠️'} Background RAG ingest {'succeeded' if result else 'failed'} for cached video {video_id}")
+                                if not result:
+                                    print(f"   RAG ingest returned False - check detailed logs above")
+                            except Exception as e:
+                                print(f"❌ Background RAG ingest error for cached video {video_id}: {e}")
+                                print(f"   Full traceback: {traceback.format_exc()}")
+                            finally:
+                                print(f"🔚 Background thread completed for cached video {video_id}")
+                        
+                        # Start background thread (don't wait)
+                        thread = threading.Thread(target=background_rag_ingest, daemon=True)
+                        thread.start()
+                        print(f"🚀 Background RAG processing started for cached video {video_id}")
+                        rag_stored = False  # Will be False initially, becomes True when background completes
                 except:
                     rag_stored = False
             
@@ -334,25 +393,53 @@ def get_transcript():
         # Step 3: Store in cache immediately (for future requests)
         store_transcript_cache(video_id, youtube_url, video_title, transcript_data)
 
-        # Step 4: Try RAG ingest (with duplicate detection)
+        # Step 4: Start RAG ingest in background (non-blocking)
         rag_stored = False
         if rag_integration:
             try:
-                print(f"🔄 Attempting RAG ingest for video {video_id}")
-                rag_stored = asyncio.run(rag_integration.ingest_transcript(
-                    video_id=video_id,
-                    video_url=youtube_url,
-                    video_title=video_title,
-                    transcript_data=transcript_data
-                ))
-                print(f"{'✅' if rag_stored else '⚠️'} RAG ingest {'succeeded' if rag_stored else 'failed'} for video {video_id}")
+                # Check if chunks already exist (quick check)
+                availability = asyncio.run(rag_integration.check_video_availability(video_id))
+                rag_stored = availability.get("available", False)
+                
+                if not rag_stored:
+                    # Start background processing (don't wait for completion)
+                    print(f"🔄 Starting background RAG ingest for video {video_id}")
+                    
+                    def background_rag_ingest():
+                        try:
+                            print(f"🔄 Background thread started for fresh video {video_id}")
+                            print(f"   Thread ID: {threading.current_thread().ident}")
+                            print(f"   Transcript entries: {len(transcript_data)}")
+                            
+                            result = asyncio.run(rag_integration.ingest_transcript(
+                                video_id=video_id,
+                                video_url=youtube_url,
+                                video_title=video_title,
+                                transcript_data=transcript_data
+                            ))
+                            print(f"{'✅' if result else '⚠️'} Background RAG ingest {'succeeded' if result else 'failed'} for video {video_id}")
+                            if not result:
+                                print(f"   RAG ingest returned False - check detailed logs above")
+                        except Exception as e:
+                            print(f"❌ Background RAG ingest error for video {video_id}: {e}")
+                            print(f"   Full traceback: {traceback.format_exc()}")
+                        finally:
+                            print(f"🔚 Background thread completed for fresh video {video_id}")
+                    
+                    # Start background thread
+                    thread = threading.Thread(target=background_rag_ingest, daemon=True)
+                    thread.start()
+                    print(f"🚀 RAG processing started in background for video {video_id}")
+                else:
+                    print(f"✅ RAG chunks already exist for video {video_id}")
+                    
             except Exception as e:
-                print(f"❌ RAG ingest error for video {video_id}: {e}")
+                print(f"❌ RAG availability check error for video {video_id}: {e}")
                 rag_stored = False
         else:
             print(f"⚠️ RAG integration not available for video {video_id}")
 
-        # Step 5: Return structured response (always succeeds if transcript extraction worked)
+        # Step 5: Return structured response immediately (transcript always succeeds)
         response = {
             "success": True,
             "video_id": video_id,
