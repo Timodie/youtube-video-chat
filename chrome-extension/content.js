@@ -86,11 +86,18 @@ function switchTab(tabName) {
 }
 
 // Function to send chat message
-function sendChatMessage() {
+async function sendChatMessage() {
   const input = document.getElementById('chat-input');
   const message = input.value.trim();
   
   if (!message) return;
+  
+  // Get current video ID
+  const videoId = getVideoId();
+  if (!videoId) {
+    addChatMessage('Error: Could not get video ID', 'ai');
+    return;
+  }
   
   // Clear input
   input.value = '';
@@ -101,11 +108,41 @@ function sendChatMessage() {
   // Add loading bubble
   addLoadingMessage();
   
-  // Simulate AI response after delay
-  setTimeout(() => {
+  try {
+    // Send chat message to Flask server
+    const response = await fetch('http://localhost:8080/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        chatInput: message,
+        video_id: videoId,
+        sessionId: videoId  // Use video ID as session ID
+      })
+    });
+    
+    const data = await response.json();
+    
+    // Remove loading message
     removeLoadingMessage();
-    addChatMessage('AI chat functionality is coming soon! 🚀\n\nI\'ll be able to discuss this video\'s content, answer questions, and provide insights based on the transcript.', 'ai');
-  }, 1500);
+    
+    if (data.success) {
+      // For now, display the raw response - we can improve formatting later
+      const aiResponse = typeof data.raw_response === 'string' 
+        ? data.raw_response 
+        : JSON.stringify(data.raw_response, null, 2);
+      
+      addChatMessage(aiResponse, 'ai');
+    } else {
+      addChatMessage(`Error: ${data.error}`, 'ai');
+    }
+    
+  } catch (error) {
+    console.error('Error sending chat message:', error);
+    removeLoadingMessage();
+    addChatMessage('Could not connect to chat server. Make sure the Flask server is running on localhost:8080', 'ai');
+  }
 }
 
 // Function to add chat message
@@ -192,10 +229,12 @@ function displayTranscript(data) {
   const transcriptTab = document.getElementById('transcript-tab');
   if (!transcriptTab) return;
   
+  const storageStatus = data.n8n_stored ? '✅ Stored in AI system' : '⚠️ Storage failed';
+  
   transcriptTab.innerHTML = `
     <div class="transcript-header">
       <h4>${data.title}</h4>
-      <p class="video-info">Language: ${data.language} (${data.language_code})</p>
+      <p class="video-info">Language: ${data.language} (${data.language_code}) | ${storageStatus}</p>
     </div>
     <div class="transcript-list" id="transcript-list">
       ${data.transcript.map(item => `
