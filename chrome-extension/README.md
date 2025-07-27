@@ -1,6 +1,6 @@
-# YouTube Transcript RAG Chrome Extension (React)
+# YouTube Transcript RAG Chrome Extension (React + TypeScript)
 
-A Chrome extension built with React that extracts YouTube transcripts and enables AI-powered chat about video content.
+A Chrome extension built with React and TypeScript that extracts YouTube transcripts and enables AI-powered chat about video content.
 
 ## 🚀 Features
 
@@ -9,7 +9,8 @@ A Chrome extension built with React that extracts YouTube transcripts and enable
 - **Progressive Enhancement** - transcript loads instantly, chat when ready
 - **Clickable Timestamps** for video navigation
 - **Real-time Status Updates** with polling
-- **Modern React Architecture** with hooks and state management
+- **Modern React + TypeScript Architecture** with hooks and full type safety
+- **Memory Leak Prevention** with proper cleanup mechanisms
 
 ## 📁 Project Structure
 
@@ -17,20 +18,23 @@ A Chrome extension built with React that extracts YouTube transcripts and enable
 chrome-extension/
 ├── src/
 │   ├── components/
-│   │   ├── Sidebar.jsx          # Main sidebar container
-│   │   ├── TranscriptTab.jsx    # Transcript display and interaction
-│   │   ├── ChatTab.jsx          # AI chat interface
-│   │   └── TranscriptButton.jsx # YouTube page injection button
+│   │   ├── Sidebar.tsx          # Main sidebar container
+│   │   ├── TranscriptTab.tsx    # Transcript display and interaction
+│   │   ├── ChatTab.tsx          # AI chat interface
+│   │   └── TranscriptButton.tsx # YouTube page injection button
 │   ├── hooks/
-│   │   ├── useVideoId.js        # Track current video ID
-│   │   ├── useTranscript.js     # Transcript state management
-│   │   └── useChat.js           # Chat state and polling
+│   │   ├── useVideoId.ts        # Track current video ID
+│   │   ├── useTranscript.ts     # Transcript state management
+│   │   └── useChat.ts           # Chat state and polling
 │   ├── services/
-│   │   └── api.js               # Flask server API integration
-│   └── content.jsx              # Main content script entry point
-├── dist/                        # Built files (generated)
+│   │   └── api.ts               # Flask server API integration
+│   ├── types/
+│   │   └── index.ts             # TypeScript type definitions
+│   └── content.tsx              # Main content script entry point
+├── dist/                        # Built files (generated - load from here)
 ├── content.css                  # Existing styles (unchanged)
 ├── manifest.json               # Chrome extension manifest
+├── tsconfig.json               # TypeScript configuration
 ├── vite.config.js              # Vite build configuration
 └── package.json                # Dependencies and scripts
 ```
@@ -52,13 +56,16 @@ npm run dev
 
 # Production build
 npm run build
+
+# TypeScript type checking
+npm run type-check
 ```
 
 ### Loading the Extension
 1. Build the extension: `npm run build`
 2. Open Chrome and go to `chrome://extensions/`
 3. Enable "Developer mode"
-4. Click "Load unpacked" and select this directory
+4. Click "Load unpacked" and select the **`dist`** folder (not the root directory)
 5. Navigate to any YouTube video and click "📝 Get Transcript"
 
 ## 🔧 Technical Details
@@ -76,13 +83,22 @@ npm run build
 ### Build Process
 - **Vite**: Fast build tool optimized for modern web development
 - **React 18**: Latest React with concurrent features
+- **TypeScript**: Full type safety with strict mode enabled
 - **ES Modules**: Modern JavaScript module system
 - **Source Maps**: Development debugging support
+- **Automatic File Copying**: Extension files automatically copied to dist/
 
-## 🎯 Key React Benefits
+### Memory Management
+- **Proper Cleanup**: All timers, intervals, and React roots are cleaned up
+- **useRef Pattern**: Timeout and interval references tracked for cleanup
+- **Component Lifecycle**: Cleanup on unmount and video changes
+- **Chrome Extension Lifecycle**: Handles extension reload/unload
 
-1. **Better State Management**: Centralized state with React hooks
-2. **Component Reusability**: Modular, testable components
-3. **Developer Experience**: Hot reload, better debugging, modern tooling
-4. **Performance**: Virtual DOM, optimized re-renders
-5. **Maintainability**: Clear separation of concerns, TypeScript ready
+## 🎯 Key TypeScript + React Benefits
+
+1. **Type Safety**: Comprehensive TypeScript interfaces for all data structures
+2. **Better State Management**: Centralized state with typed React hooks
+3. **Component Reusability**: Modular, testable components with prop types
+4. **Developer Experience**: IntelliSense, compile-time error checking, refactoring
+5. **Memory Safety**: Proper cleanup prevents browser memory leaks
+6. **Maintainability**: Clear separation of concerns, self-documenting code
