@@ -3,6 +3,8 @@
  * No external dependencies, no DOM manipulation, no storage access
  */
 
+import { makeTimestampsClickable } from './safeTimestamps';
+
 /**
  * Safely parse markdown to HTML
  * Returns original text if parsing fails
@@ -45,6 +47,9 @@ export function safeMarkdownToHtml(content: string): string {
 
     // Clean up any multiple <br> tags
     html = html.replace(/(<br>){3,}/g, '<br><br>');
+
+    // Make timestamps clickable after markdown parsing
+    html = makeTimestampsClickable(html);
 
     return html;
   } catch (error) {

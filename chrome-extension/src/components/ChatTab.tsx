@@ -139,7 +139,11 @@ function ChatMessage({ message }: ChatMessageProps) {
         {isUser ? (
           <p>{message.content}</p>
         ) : (
-          <SafeMarkdown content={message.content} fallback={message.content} />
+          <SafeMarkdown 
+            content={message.content} 
+            fallback={message.content}
+            timestamps={message.timestamps}
+          />
         )}
       </div>
     </div>

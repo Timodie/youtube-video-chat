@@ -3,9 +3,13 @@ import { createRoot, Root } from 'react-dom/client';
 import Sidebar from './components/Sidebar';
 import TranscriptButton from './components/TranscriptButton';
 import { useVideoId } from './hooks/useVideoId';
+import { initializeTimestampHandler } from './utils/safeTimestamps';
 import '../content.css';
 
 console.log('YouTube Transcript Extractor (React) loaded');
+
+// Initialize timestamp handler globally
+initializeTimestampHandler();
 
 function App() {
   const [sidebarVisible, setSidebarVisible] = useState(false);
