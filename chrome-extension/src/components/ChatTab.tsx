@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useChat } from '../hooks/useChat';
 import { ChatTabProps, ChatMessageProps } from '../types';
+import { SafeMarkdown } from './SafeMarkdown';
 
 export default function ChatTab({ videoId }: ChatTabProps): JSX.Element {
   const [inputMessage, setInputMessage] = useState('');
@@ -135,7 +136,11 @@ function ChatMessage({ message }: ChatMessageProps) {
         {isUser ? '👤' : '🤖'}
       </div>
       <div className="message-content">
-        <p>{message.content}</p>
+        {isUser ? (
+          <p>{message.content}</p>
+        ) : (
+          <SafeMarkdown content={message.content} fallback={message.content} />
+        )}
       </div>
     </div>
   );
