@@ -22,6 +22,7 @@ export function useChat(videoId: string | null): UseChatReturn {
   const [loading, setLoading] = useState<boolean>(false);
   const [polling, setPolling] = useState<boolean>(false);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Welcome message
   useEffect(() => {
@@ -81,12 +82,13 @@ export function useChat(videoId: string | null): UseChatReturn {
     }, 15000); // Poll every 15 seconds
 
     // Auto-stop polling after 10 minutes
-    setTimeout(() => {
+    timeoutRef.current = setTimeout(() => {
       if (pollingRef.current) {
         setPolling(false);
         clearInterval(pollingRef.current);
         pollingRef.current = null;
       }
+      timeoutRef.current = null;
     }, 600000);
   }, [videoId, checkChatStatus]);
 
@@ -96,6 +98,10 @@ export function useChat(videoId: string | null): UseChatReturn {
       setPolling(false);
       clearInterval(pollingRef.current);
       pollingRef.current = null;
+    }
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
     }
   }, []);
 

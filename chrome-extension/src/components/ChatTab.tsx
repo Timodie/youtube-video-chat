@@ -1,7 +1,8 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useChat } from '../hooks/useChat';
+import { ChatTabProps, ChatMessageProps } from '../types';
 
-export default function ChatTab({ videoId }) {
+export default function ChatTab({ videoId }: ChatTabProps): JSX.Element {
   const [inputMessage, setInputMessage] = useState('');
   const { 
     messages, 
@@ -9,10 +10,9 @@ export default function ChatTab({ videoId }) {
     loading, 
     polling, 
     sendMessage, 
-    checkChatStatus,
-    startPolling 
+    checkChatStatus
   } = useChat(videoId);
-  const messagesEndRef = useRef(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -26,7 +26,7 @@ export default function ChatTab({ videoId }) {
     }
   }, [videoId, checkChatStatus]);
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputMessage.trim() || loading) return;
 
@@ -101,7 +101,7 @@ export default function ChatTab({ videoId }) {
   );
 }
 
-function ChatMessage({ message }) {
+function ChatMessage({ message }: ChatMessageProps) {
   if (message.type === 'loading') {
     return (
       <div className="chat-message ai loading-message">

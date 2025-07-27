@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import TranscriptTab from './TranscriptTab';
 import ChatTab from './ChatTab';
 import { SidebarProps } from '../types';

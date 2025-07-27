@@ -1,10 +1,11 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { useTranscript } from '../hooks/useTranscript';
 import { useChat } from '../hooks/useChat';
+import { TranscriptTabProps } from '../types';
 
-export default function TranscriptTab({ videoId }) {
+export default function TranscriptTab({ videoId }: TranscriptTabProps): JSX.Element {
   const { transcript, loading, error, fetchTranscript } = useTranscript();
-  const { chatStatus, startPolling } = useChat(videoId);
+  const { startPolling } = useChat(videoId);
 
   useEffect(() => {
     if (videoId) {
@@ -18,7 +19,7 @@ export default function TranscriptTab({ videoId }) {
     }
   }, [videoId, fetchTranscript, startPolling]);
 
-  const handleTimestampClick = (seconds) => {
+  const handleTimestampClick = (seconds: number): void => {
     const video = document.querySelector('video');
     if (video) {
       video.currentTime = seconds;
