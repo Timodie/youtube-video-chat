@@ -8,9 +8,8 @@ CREATE TABLE chat_histories (
   role text NOT NULL CHECK (role IN ('user', 'assistant', 'summary')),
   message text NOT NULL,
   timestamp timestamp DEFAULT now(),
-  is_summary boolean DEFAULT false,
-  summarizes_from_id uuid, -- Points to first message this summary covers
-  summarizes_to_id uuid,   -- Points to last message this summary covers
+  summarizes_from_id uuid, -- Points to first message this summary covers (only used when role = 'summary')
+  summarizes_to_id uuid,   -- Points to last message this summary covers (only used when role = 'summary')
   created_at timestamp DEFAULT now()
 );
 
@@ -21,12 +20,12 @@ ON chat_histories (video_id, session_id, timestamp);
 -- Index for summary range queries (finding existing summaries)
 CREATE INDEX idx_chat_histories_summary_range 
 ON chat_histories (video_id, session_id, summarizes_from_id, summarizes_to_id) 
-WHERE is_summary = true;
+WHERE role = 'summary';
 
--- Index for efficient filtering of non-summary messages (for UI display)
+-- Index for efficient filtering of display messages (user/assistant only)
 CREATE INDEX idx_chat_histories_display 
 ON chat_histories (video_id, session_id, timestamp) 
-WHERE is_summary = false;
+WHERE role IN ('user', 'assistant');
 
 -- Add RLS (Row Level Security) policies if needed
 -- ALTER TABLE chat_histories ENABLE ROW LEVEL SECURITY;
@@ -42,15 +41,15 @@ WHERE is_summary = false;
 -- VALUES ('dQw4w9WgXcQ', 'dQw4w9WgXcQ', 'assistant', 'This video is about...');
 --
 -- Store conversation summary:
--- INSERT INTO chat_histories (video_id, session_id, role, message, is_summary, summarizes_from_id, summarizes_to_id) 
--- VALUES ('dQw4w9WgXcQ', 'dQw4w9WgXcQ', 'summary', 'User asked about video content...', true, 'uuid1', 'uuid2');
+-- INSERT INTO chat_histories (video_id, session_id, role, message, summarizes_from_id, summarizes_to_id) 
+-- VALUES ('dQw4w9WgXcQ', 'dQw4w9WgXcQ', 'summary', 'User asked about video content...', 'uuid1', 'uuid2');
 --
 -- Get all messages for display (excludes summaries):
 -- SELECT id, role, message, timestamp FROM chat_histories 
--- WHERE video_id = 'dQw4w9WgXcQ' AND session_id = 'dQw4w9WgXcQ' AND is_summary = false 
+-- WHERE video_id = 'dQw4w9WgXcQ' AND session_id = 'dQw4w9WgXcQ' AND role IN ('user', 'assistant')
 -- ORDER BY timestamp;
 --
 -- Check for existing summary covering a range:
 -- SELECT message FROM chat_histories 
 -- WHERE video_id = 'dQw4w9WgXcQ' AND session_id = 'dQw4w9WgXcQ' 
--- AND is_summary = true AND summarizes_from_id = 'uuid1' AND summarizes_to_id = 'uuid2';
+-- AND role = 'summary' AND summarizes_from_id = 'uuid1' AND summarizes_to_id = 'uuid2';
