@@ -560,15 +560,17 @@ async def chat_with_video():
             try:
                 print(f"🤖 Using RAG agent for video {video_id}")
                 
-                result = await rag_integration.chat_with_video(video_id, chat_input)
+                result = await rag_integration.chat_with_video(video_id, chat_input, session_id)
                 
                 if result["success"]:
                     print(f"✅ RAG agent response successful")
                     return jsonify({
                         "success": True,
                         "response": result["response"],
+                        "chat_history": result.get("chat_history", []),  # Full conversation for UI
                         "timestamps": result.get("timestamps", []),
                         "video_id": video_id,
+                        "session_id": result.get("session_id", session_id),
                         "method": "rag_agent",
                         "processed_at": result.get("processed_at")
                     })
@@ -583,7 +585,10 @@ async def chat_with_video():
         return jsonify({
             "success": False,
             "error": "RAG agent failed. Please ensure video transcript has been processed.",
-            "video_id": video_id
+            "chat_history": [],
+            "timestamps": [],
+            "video_id": video_id,
+            "session_id": session_id
         }), 500
 
     except Exception as e:
@@ -593,7 +598,10 @@ async def chat_with_video():
         return jsonify({
             "success": False,
             "error": "Internal server error",
-            "video_id": video_id if 'video_id' in locals() else None
+            "chat_history": [],
+            "timestamps": [],
+            "video_id": video_id if 'video_id' in locals() else None,
+            "session_id": session_id if 'session_id' in locals() else None
         }), 500
 
 if __name__ == '__main__':

@@ -1,9 +1,8 @@
 import sys
 import os
-import asyncio
 from typing import Optional, Dict, Any, List
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add rag-agent to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'rag-agent'))
@@ -88,26 +87,35 @@ class RAGIntegration:
             print(f"   Traceback: {traceback.format_exc()}")
             return False
     
-    async def chat_with_video(self, video_id: str, chat_input: str) -> Dict[str, Any]:
+    async def chat_with_video(self, video_id: str, chat_input: str, session_id: str = None) -> Dict[str, Any]:
         """
-        Chat with RAG agent about video content.
+        Chat with RAG agent about video content using dual-context strategy.
         
         Args:
             video_id: YouTube video ID for context
             chat_input: User's question/message
+            session_id: Session identifier (defaults to video_id)
             
         Returns:
-            Dict with response, success status, and optional timestamps
+            Dict with response, success status, full chat history, and timestamps
         """
         try:
-            print(f"💬 Processing chat for video {video_id}")
+            session_id = session_id or video_id
+            print(f"💬 Processing chat for video {video_id} (session: {session_id})")
             print(f"   Query: {chat_input}")
             
-            # Prepare the prompt with video context
-            prompt = f"Video ID: {video_id}\nUser Question: {chat_input}"
+            # Store user message first
+            user_message_id = await self._store_chat_message(video_id, session_id, "user", chat_input)
+            if not user_message_id:
+                print(f"⚠️ Failed to store user message for video {video_id}")
             
-            # Run the RAG agent
-            result = await youtube_ai_assistant.run(prompt, deps=self.deps)
+            # Get dual context: full history for display + efficient context for LLM
+            context = await self._build_llm_context(video_id, session_id)
+            
+            print(f"🤖 Sending efficient context to LLM (~{len(context['llm_prompt'])} chars)")
+            
+            # Run the RAG agent with efficient context
+            result = await youtube_ai_assistant.run(context["llm_prompt"], deps=self.deps)
             
             print(f"✅ RAG agent response generated")
             print(f"   Response length: {len(str(result.data))} characters")
@@ -115,16 +123,28 @@ class RAGIntegration:
             # Extract response and any timestamps/metadata
             response_text = str(result.data)
             
+            # Store AI response
+            ai_message_id = await self._store_chat_message(video_id, session_id, "assistant", response_text)
+            if not ai_message_id:
+                print(f"⚠️ Failed to store AI response for video {video_id}")
+            
+            # Get updated full conversation history for frontend display
+            updated_history = await self._get_all_messages(video_id, session_id)
+            
             # Try to extract timestamps from response for video navigation
             import re
             timestamps = re.findall(r'\[(\d{2}:\d{2}:\d{2}|\d{2}:\d{2})\]', response_text)
             
+            print(f"📱 Returning response with {len(updated_history)} messages for UI display")
+            
             return {
                 "success": True,
                 "response": response_text,
+                "chat_history": updated_history,  # Full conversation for UI display
                 "timestamps": timestamps,
                 "video_id": video_id,
-                "processed_at": datetime.utcnow().isoformat()
+                "session_id": session_id,
+                "processed_at": datetime.now(timezone.utc).isoformat()
             }
             
         except Exception as e:
@@ -132,13 +152,21 @@ class RAGIntegration:
             print(f"   Error: {str(e)}")
             print(f"   Traceback: {traceback.format_exc()}")
             
+            # Try to get existing chat history even on error
+            try:
+                error_history = await self._get_all_messages(video_id, session_id or video_id)
+            except:
+                error_history = []
+            
             return {
                 "success": False,
                 "response": "I'm sorry, I couldn't process your question about this video. Please try again or ensure the video transcript has been processed.",
+                "chat_history": error_history,
                 "error": str(e),
                 "timestamps": [],
                 "video_id": video_id,
-                "processed_at": datetime.utcnow().isoformat()
+                "session_id": session_id or video_id,
+                "processed_at": datetime.now(timezone.utc).isoformat()
             }
     
     async def check_video_availability(self, video_id: str) -> Dict[str, Any]:
@@ -461,7 +489,7 @@ class RAGIntegration:
     
     # 4. CONTEXT BUILDING METHODS (Main orchestration)
     
-    async def _format_messages_for_llm(self, video_id: str, messages: List[Dict]) -> str:
+    def _format_messages_for_llm(self, video_id: str, messages: List[Dict]) -> str:
         """
         Format messages into LLM prompt string.
         
@@ -488,7 +516,7 @@ Current question: {messages[-1]['message'] if messages else ""}"""
         
         return prompt
     
-    async def _format_recent_messages(self, messages: List[Dict]) -> str:
+    def _format_recent_messages(self, messages: List[Dict]) -> str:
         """
         Format recent messages for LLM context.
         
@@ -555,7 +583,7 @@ Current question: {messages[-1]['message'] if messages else ""}"""
             summary = await self._get_or_create_summary(video_id, session_id, older_messages)
             
             # Build efficient LLM context with summary + recent
-            recent_formatted = await self._format_recent_messages(recent_messages)
+            recent_formatted = self._format_recent_messages(recent_messages)
             
             llm_prompt = f"""Video ID: {video_id}
 
