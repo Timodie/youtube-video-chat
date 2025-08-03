@@ -603,4 +603,267 @@ The system is fully functional with Direct RAG architecture:
 - **Reliable processing** for videos of any length
 - **Progressive enhancement UX** - users never wait for AI features
 
-Last updated: July 26, 2025
+## Chat Memory System Design
+
+### Current Issue: No Conversation History
+The LLM has no memory of previous messages because each chat request creates a fresh prompt without conversation context. When users ask follow-up questions, the agent treats them as completely new conversations.
+
+**Root Cause in `rag_integration.py:107-110`:**
+```python
+prompt = f"Video ID: {video_id}\nUser Question: {chat_input}"
+result = await youtube_ai_assistant.run(prompt, deps=self.deps)
+```
+
+### Solution: Smart Memory Management (ChatGPT-Style)
+
+#### 1. Database Schema for Chat History
+```sql
+CREATE TABLE chat_histories (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  video_id text NOT NULL,
+  session_id text NOT NULL,
+  role text NOT NULL, -- 'user', 'assistant', or 'summary'
+  message text NOT NULL,
+  timestamp timestamp DEFAULT now(),
+  is_summary boolean DEFAULT false,
+  summarizes_from_id uuid, -- Points to first message this summary covers
+  summarizes_to_id uuid,   -- Points to last message this summary covers
+  created_at timestamp DEFAULT now()
+);
+
+-- Index for fast retrieval by video/session
+CREATE INDEX idx_chat_histories_session 
+ON chat_histories (video_id, session_id, timestamp);
+
+-- Index for summary range queries
+CREATE INDEX idx_chat_histories_summary_range 
+ON chat_histories (video_id, session_id, summarizes_from_id, summarizes_to_id) 
+WHERE is_summary = true;
+```
+
+#### 2. Dual-Context Strategy: Full History for Users + Efficient Context for LLM
+
+**Key Insight:** Users need to see full conversation history in the UI, but LLM only needs efficient context for processing.
+
+**Approach:** 
+- **Never delete user/assistant messages** - Preserve full conversation for UI display
+- **Use summaries + recent messages for LLM** - Keep costs predictable and avoid token limits
+- **Smart summary caching** - Generate summaries once, reuse across requests
+
+**Implementation Plan:**
+```python
+async def chat_with_video(self, video_id: str, chat_input: str, session_id: str = None):
+    session_id = session_id or video_id
+    
+    # Store user message first
+    await self._store_chat_message(video_id, session_id, "user", chat_input)
+    
+    # Get dual context: full history for display + efficient context for LLM
+    context = await self._build_llm_context(video_id, session_id)
+    
+    # Send efficient context to LLM
+    result = await youtube_ai_assistant.run(context["llm_prompt"], deps=self.deps)
+    
+    # Store AI response
+    await self._store_chat_message(video_id, session_id, "assistant", str(result.data))
+    
+    # Return response with full conversation history for frontend display
+    return {
+        "success": True,
+        "response": str(result.data),
+        "chat_history": context["display_messages"],  # Full history for UI
+        "timestamps": extracted_timestamps,
+        "video_id": video_id
+    }
+
+async def _build_llm_context(self, video_id: str, session_id: str):
+    # Get ALL user/assistant messages for UI display
+    all_messages = await self._get_all_messages(video_id, session_id)
+    display_messages = [m for m in all_messages if m['role'] in ['user', 'assistant']]
+    
+    if len(display_messages) <= 12:
+        # Short conversation - send everything to LLM
+        llm_prompt = self._format_messages_for_llm(video_id, display_messages)
+        return {
+            "llm_prompt": llm_prompt,
+            "display_messages": display_messages
+        }
+    
+    # Long conversation - use summary + recent for LLM efficiency
+    recent_messages = display_messages[-8:]  # Last 4 exchanges
+    older_messages = display_messages[:-8]
+    
+    # Get or create summary for older messages
+    summary = await self._get_or_create_summary(video_id, session_id, older_messages)
+    
+    # Build efficient LLM context
+    llm_prompt = f"""
+    Video ID: {video_id}
+    
+    Previous conversation summary: {summary}
+    
+    Recent conversation:
+    {self._format_recent_messages(recent_messages)}
+    
+    Current question: {display_messages[-1]['message']}
+    """
+    
+    return {
+        "llm_prompt": llm_prompt,
+        "display_messages": display_messages  # Full history for frontend
+    }
+
+async def _get_or_create_summary(self, video_id: str, session_id: str, messages_to_summarize: List):
+    # Check if we already have a summary covering this message range
+    existing_summary = await self._find_summary_covering_range(
+        video_id, session_id,
+        from_id=messages_to_summarize[0]['id'],
+        to_id=messages_to_summarize[-1]['id']
+    )
+    
+    if existing_summary:
+        return existing_summary['message']
+    
+    # Generate new summary (costs ~$0.01-0.05, done once)
+    summary_text = await self._generate_conversation_summary(messages_to_summarize)
+    
+    # Store summary with range metadata (never delete user/assistant messages)
+    await self._store_chat_message(
+        video_id, session_id,
+        role="summary",
+        message=summary_text,
+        is_summary=True,
+        summarizes_from_id=messages_to_summarize[0]['id'],
+        summarizes_to_id=messages_to_summarized[-1]['id']
+    )
+    
+    return summary_text
+```
+
+#### 3. Cost Analysis
+**Current (No Memory):** ~$0.001 per message
+**Full History (Bad):** Costs scale quadratically, hits token limits
+**Sliding Window (Good):** ~$0.002 per message, fixed cost regardless of conversation length
+
+#### 4. Enhanced System Prompt
+```python
+system_prompt = """
+You are a YouTube Video Assistant with conversation memory. You maintain context across multiple messages about the same video.
+
+## Context Awareness:
+- Previous conversation history is provided with each request
+- Reference earlier parts of the conversation when relevant: "As I mentioned earlier..."
+- Remember facts and questions from the current session
+- Build upon previous answers naturally for follow-up questions
+
+## Response Guidelines:
+- If referencing something you said before: "Building on that previous point..."
+- If answering a follow-up: "To expand on what I said about..."
+- Maintain conversational flow while staying accurate to transcript data
+- Handle context switches gracefully
+"""
+```
+
+#### 5. Frontend Integration & User Experience
+
+**Chat History Display:**
+```typescript
+// Chrome extension displays full conversation history
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  message: string;
+  timestamp: string;
+}
+
+// API response includes full history for display
+interface ChatResponse {
+  success: boolean;
+  response: string;
+  chat_history: ChatMessage[];  // Complete conversation for UI
+  timestamps: string[];
+  video_id: string;
+}
+
+// Frontend filters out summary messages, shows only user/assistant
+const displayMessages = response.chat_history.filter(msg => 
+  msg.role === 'user' || msg.role === 'assistant'
+);
+```
+
+**User Experience Flow:**
+1. **User types message** → Stored in database immediately
+2. **LLM receives efficient context** → Summary + recent messages (not full history)
+3. **AI response generated** → Stored in database
+4. **Frontend updates** → Shows complete conversation history including new response
+5. **User scrolls up** → Can see entire conversation from beginning
+
+#### 6. Implementation Helper Methods
+```python
+async def _get_all_messages(self, video_id: str, session_id: str) -> List[Dict]:
+    """Get all messages for conversation display (excludes summaries)"""
+    return self.deps.supabase.from_('chat_histories') \
+        .select('id, role, message, timestamp') \
+        .eq('video_id', video_id) \
+        .eq('session_id', session_id) \
+        .eq('is_summary', False) \
+        .order('timestamp') \
+        .execute()
+
+async def _find_summary_covering_range(self, video_id: str, session_id: str, from_id: str, to_id: str):
+    """Check if existing summary covers the specified message range"""
+    return self.deps.supabase.from_('chat_histories') \
+        .select('message') \
+        .eq('video_id', video_id) \
+        .eq('session_id', session_id) \
+        .eq('is_summary', True) \
+        .eq('summarizes_from_id', from_id) \
+        .eq('summarizes_to_id', to_id) \
+        .single() \
+        .execute()
+
+async def _generate_conversation_summary(self, messages: List[Dict]) -> str:
+    """Generate summary of conversation segment using OpenAI"""
+    conversation_text = "\n".join([f"{msg['role']}: {msg['message']}" for msg in messages])
+    
+    response = await self.deps.openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{
+            "role": "system",
+            "content": "Summarize this conversation about a YouTube video in 2-3 sentences. Focus on key topics discussed and questions asked."
+        }, {
+            "role": "user", 
+            "content": conversation_text
+        }]
+    )
+    return response.choices[0].message.content
+
+async def _store_chat_message(self, video_id: str, session_id: str, role: str, message: str, **kwargs):
+    """Store message with optional summary metadata"""
+    data = {
+        "video_id": video_id,
+        "session_id": session_id,
+        "role": role,
+        "message": message,
+        "is_summary": kwargs.get('is_summary', False),
+        "summarizes_from_id": kwargs.get('summarizes_from_id'),
+        "summarizes_to_id": kwargs.get('summarizes_to_id')
+    }
+    return self.deps.supabase.from_('chat_histories').insert(data).execute()
+```
+
+#### 7. Benefits of Dual-Context Approach
+- ✅ **Complete chat history preserved** - Users never lose conversation context
+- ✅ **Efficient LLM processing** - Fixed cost per message (~$0.002) regardless of history length
+- ✅ **Natural conversation flow** - "What did you just say about that?" works perfectly
+- ✅ **Scrollable chat interface** - Users can reference any previous exchange
+- ✅ **Smart summary caching** - Summaries generated once, reused across requests
+- ✅ **No data loss** - User/assistant messages never deleted from database
+- ✅ **Frontend-friendly API** - Complete conversation history available for display
+- ✅ **Cost optimization** - Avoid redundant summarization through range tracking
+- ✅ **Session isolation** - Each video maintains separate conversation context
+- ✅ **Production scalable** - Handles conversations of any length efficiently
+
+This approach mirrors how ChatGPT handles long conversations internally, ensuring both natural conversation flow and cost-effective operation.
+
+Last updated: July 29, 2025
