@@ -1,4 +1,4 @@
-import { TranscriptResponse, ChatStatusResponse, ChatResponse, APIError } from '../types';
+import { TranscriptResponse, ChatStatusResponse, ChatResponse, APIError, ChatMessage } from '../types';
 
 const API_BASE_URL = 'http://localhost:8080';
 
@@ -17,7 +17,7 @@ export class YouTubeTranscriptAPI {
       });
 
       const data: TranscriptResponse = await response.json();
-      
+
       if (!data.success) {
         throw new APIError(data.error || 'Failed to get transcript', response.status, data);
       }
@@ -36,7 +36,7 @@ export class YouTubeTranscriptAPI {
   static async getChatStatus(videoId: string): Promise<ChatStatusResponse> {
     try {
       const response = await fetch(`${API_BASE_URL}/chat/status/${videoId}`);
-      
+
       if (!response.ok) {
         throw new APIError(`HTTP ${response.status}`, response.status);
       }
@@ -46,6 +46,33 @@ export class YouTubeTranscriptAPI {
       console.error('Error checking chat status:', error);
       if (error instanceof APIError) throw error;
       throw new APIError('Network error while checking chat status');
+    }
+  }
+
+  /**
+   * Get chat history for a video
+   */
+  static async getChatHistory(videoId: string, sessionId?: string): Promise<{
+    success: boolean;
+    chat_history: ChatMessage[];
+    video_id: string;
+    session_id: string;
+    message_count: number;
+    error?: string;
+  }> {
+    try {
+      const params = sessionId ? `?sessionId=${sessionId}` : '';
+      const response = await fetch(`${API_BASE_URL}/chat/history/${videoId}${params}`);
+
+      if (!response.ok) {
+        throw new APIError(`HTTP ${response.status}`, response.status);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Error fetching chat history:', error);
+      if (error instanceof APIError) throw error;
+      throw new APIError('Network error while fetching chat history');
     }
   }
 
@@ -67,7 +94,7 @@ export class YouTubeTranscriptAPI {
       });
 
       const data: ChatResponse = await response.json();
-      
+
       if (!data.success) {
         throw new APIError(data.error || 'Chat request failed', response.status, data);
       }
@@ -89,12 +116,12 @@ export function extractVideoId(url: string): string | null {
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
     /youtube\.com\/watch\?.*v=([^&\n?#]+)/
   ];
-  
+
   for (const pattern of patterns) {
     const match = url.match(pattern);
     if (match) return match[1];
   }
-  
+
   return null;
 }
 

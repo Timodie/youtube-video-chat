@@ -34,10 +34,12 @@ export interface ChatStatusResponse {
 export interface ChatResponse {
   success: boolean;
   response: string;
+  chat_history: ChatMessage[];  // NEW: Full conversation history
   timestamps: string[];
   video_id: string;
-  method: string;
-  processed_at: string;
+  session_id: string;           // NEW: Session tracking
+  method?: string;
+  processed_at?: string;
   error?: string;
 }
 
@@ -47,8 +49,16 @@ export interface ChatRequest {
   sessionId: string;
 }
 
-// Chat Message Types
+// Chat Message Types (API format)
 export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  message: string;
+  timestamp: string;
+}
+
+// UI Chat Message Types (for display)
+export interface UIChatMessage {
   id: string;
   type: 'user' | 'ai' | 'system' | 'loading';
   content: string;
@@ -64,7 +74,7 @@ export interface TranscriptState {
 }
 
 export interface ChatState {
-  messages: ChatMessage[];
+  messages: UIChatMessage[];  // Use UI format for existing state
   chatStatus: ChatStatusResponse | null;
   loading: boolean;
   polling: boolean;
@@ -82,6 +92,9 @@ export interface TranscriptTabProps {
 
 export interface ChatTabProps {
   videoId: string | null;
+  chatHistory: ChatMessage[];
+  onChatUpdate: (newChatHistory: ChatMessage[]) => void;
+  isLoading: boolean;
 }
 
 export interface TranscriptButtonProps {
@@ -90,7 +103,7 @@ export interface TranscriptButtonProps {
 }
 
 export interface ChatMessageProps {
-  message: ChatMessage;
+  message: UIChatMessage;
 }
 
 // API Error Types

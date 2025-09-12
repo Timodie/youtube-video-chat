@@ -937,3 +937,41 @@
   background-color: #444;
   color: #666;
 }
+
+/* Optimistic message styling */
+.chat-message.optimistic {
+  opacity: 0.7; /* Slightly faded until confirmed by API */
+}
+
+.chat-message {
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Loading history state */
+.loading-history {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 20px;
+  color: #666;
+}
+
+.loading-history .spinner {
+  margin-bottom: 16px;
+}
+
+/* Dark mode for new elements */
+[dark] .loading-history {
+  color: #aaa;
+}

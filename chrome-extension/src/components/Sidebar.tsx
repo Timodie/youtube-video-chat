@@ -1,12 +1,52 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import TranscriptTab from './TranscriptTab';
 import ChatTab from './ChatTab';
-import { SidebarProps } from '../types';
+import { SidebarProps, ChatMessage } from '../types';
+import { YouTubeTranscriptAPI } from '../services/api';
 
 type TabType = 'transcript' | 'chat';
 
 export default function Sidebar({ videoId, onClose }: SidebarProps): JSX.Element {
   const [activeTab, setActiveTab] = useState<TabType>('transcript');
+  
+  // Chat state moved to Sidebar level for persistence across tab switches
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatInitialized, setChatInitialized] = useState(false);
+
+  // Load chat history when sidebar opens or video changes
+  useEffect(() => {
+    if (videoId && !chatInitialized) {
+      loadChatHistory();
+    }
+  }, [videoId, chatInitialized]);
+
+  const loadChatHistory = async () => {
+    if (!videoId) return;
+    
+    try {
+      setChatLoading(true);
+      const response = await YouTubeTranscriptAPI.getChatHistory(videoId);
+      
+      if (response.success) {
+        setChatHistory(response.chat_history);
+        console.log(`📚 Loaded ${response.message_count} previous messages for ${videoId}`);
+      } else {
+        console.warn('Failed to load chat history:', response.error);
+        setChatHistory([]);
+      }
+    } catch (error) {
+      console.error('Failed to load chat history:', error);
+      setChatHistory([]); // Start fresh on error
+    } finally {
+      setChatLoading(false);
+      setChatInitialized(true);
+    }
+  };
+
+  const handleChatUpdate = (newChatHistory: ChatMessage[]) => {
+    setChatHistory(newChatHistory);
+  };
 
   return (
     <div className="transcript-sidebar open">
@@ -35,7 +75,12 @@ export default function Sidebar({ videoId, onClose }: SidebarProps): JSX.Element
           <TranscriptTab videoId={videoId} />
         )}
         {activeTab === 'chat' && (
-          <ChatTab videoId={videoId} />
+          <ChatTab 
+            videoId={videoId}
+            chatHistory={chatHistory}
+            onChatUpdate={handleChatUpdate}
+            isLoading={chatLoading}
+          />
         )}
       </div>
     </div>

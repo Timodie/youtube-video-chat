@@ -535,6 +535,42 @@ def get_chat_status(video_id):
             "video_id": video_id
         }), 500
 
+@app.route('/chat/history/<video_id>', methods=['GET'])
+async def get_chat_history(video_id):
+    """Get existing chat history for a video session"""
+    try:
+        session_id = request.args.get('sessionId', video_id)
+        
+        print(f"📚 Getting chat history for video {video_id} (session: {session_id})")
+        
+        if not rag_integration:
+            return jsonify({
+                "success": False,
+                "error": "RAG integration not available",
+                "chat_history": []
+            }), 503
+        
+        # Use existing helper method to get all messages
+        chat_history = await rag_integration._get_all_messages(video_id, session_id)
+        
+        print(f"✅ Retrieved {len(chat_history)} messages for video {video_id}")
+        
+        return jsonify({
+            "success": True,
+            "chat_history": chat_history,
+            "video_id": video_id,
+            "session_id": session_id,
+            "message_count": len(chat_history)
+        })
+        
+    except Exception as e:
+        print(f"❌ Error getting chat history for video {video_id}: {e}")
+        return jsonify({
+            "success": False,
+            "error": "Failed to retrieve chat history",
+            "chat_history": []
+        }), 500
+
 @app.route('/chat', methods=['POST'])
 async def chat_with_video():
     """Chat about a video using the RAG AI agent"""
