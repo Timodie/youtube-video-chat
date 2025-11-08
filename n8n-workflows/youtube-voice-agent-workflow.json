@@ -1,0 +1,371 @@
+{
+  "name": "YouTube Voice Agent with Supabase RAG",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "youtube-voice-chat",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Voice Agent Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"question\": \"{{ $json.question }}\",\n  \"video_id\": \"{{ $json.video_id || 'dQw4w9WgXcQ' }}\",\n  \"session_id\": \"{{ $json.session_id || $json.video_id }}\"\n}",
+        "options": {}
+      },
+      "id": "validate-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "inputType": "string",
+        "input": "={{ $json.question }}"
+      },
+      "id": "generate-embedding",
+      "name": "Generate Question Embedding",
+      "type": "@n8n/n8n-nodes-langchain.embeddings",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, video_id, url, chunk_number, title, summary, content, metadata,\n       1 - (embedding <=> $1::vector) as similarity\nFROM youtube_transcript_pages \nWHERE metadata->>'video_id' = $2\nORDER BY embedding <=> $1::vector\nLIMIT 5",
+        "additionalFields": {
+          "queryParameters": "={{ [$('Generate Question Embedding').json.embedding, $json.video_id] }}"
+        }
+      },
+      "id": "vector-search",
+      "name": "Supabase Vector Search",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "resource": "database",
+        "operation": "getAll",
+        "tableId": "chat_histories",
+        "requestOptions": {
+          "query": {
+            "select": "id,role,message,timestamp",
+            "video_id": "eq.{{ $('Validate Input').json.video_id }}",
+            "session_id": "eq.{{ $('Validate Input').json.session_id }}",
+            "role": "in.(user,assistant)",
+            "order": "timestamp.desc",
+            "limit": "10"
+          }
+        }
+      },
+      "id": "get-chat-history",
+      "name": "Get Chat History",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [900, 500]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"transcript_context\": {{ $('Supabase Vector Search').all().map(chunk => `[${chunk.metadata.start_time || 'Unknown'}-${chunk.metadata.end_time || 'Unknown'}] ${chunk.content}`).join('\\n\\n') }},\n  \"conversation_context\": {{ $('Get Chat History').all().reverse().map(msg => `${msg.role}: ${msg.message}`).join('\\n') }},\n  \"video_info\": {\n    \"video_id\": \"{{ $('Validate Input').json.video_id }}\",\n    \"title\": \"{{ $('Supabase Vector Search').first().title || 'Unknown Video' }}\",\n    \"chunk_count\": {{ $('Supabase Vector Search').all().length }}\n  },\n  \"user_question\": \"{{ $('Validate Input').json.question }}\"\n}",
+        "options": {}
+      },
+      "id": "build-context",
+      "name": "Build AI Context",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a YouTube video assistant optimized for voice conversations. The user is asking about a specific video via voice interaction.\n\nGuidelines for voice responses:\n- Keep responses conversational and natural (under 200 words)\n- Include specific timestamps when referencing content (e.g., \"at 2 minutes 30 seconds\")\n- Reference previous conversation when relevant\n- Be concise but informative for voice clarity\n- Use natural speech patterns, not written text formatting\n\nYou have access to:\n1. Relevant transcript chunks with timestamps\n2. Previous conversation history for context\n3. Video metadata and information\n\nAlways base your answers on the actual transcript content provided."
+            },
+            {
+              "role": "user", 
+              "content": "Video: {{ $json.video_info.title }} (ID: {{ $json.video_info.video_id }})\n\nRelevant Transcript Content:\n{{ $json.transcript_context }}\n\nPrevious Conversation:\n{{ $json.conversation_context || 'No previous conversation' }}\n\nUser Question: {{ $json.user_question }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 300
+        }
+      },
+      "id": "ai-response",
+      "name": "Generate AI Response",
+      "type": "@n8n/n8n-nodes-langchain.openai",
+      "typeVersion": 1,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "resource": "database",
+        "operation": "insert",
+        "tableId": "chat_histories",
+        "data": {
+          "video_id": "={{ $('Validate Input').json.video_id }}",
+          "session_id": "={{ $('Validate Input').json.session_id }}",
+          "role": "user",
+          "message": "={{ $('Validate Input').json.question }}"
+        }
+      },
+      "id": "store-user-message",
+      "name": "Store User Message",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1560, 200]
+    },
+    {
+      "parameters": {
+        "resource": "database",
+        "operation": "insert", 
+        "tableId": "chat_histories",
+        "data": {
+          "video_id": "={{ $('Validate Input').json.video_id }}",
+          "session_id": "={{ $('Validate Input').json.session_id }}",
+          "role": "assistant",
+          "message": "={{ $('Generate AI Response').json.choices[0].message.content }}"
+        }
+      },
+      "id": "store-ai-response",
+      "name": "Store AI Response",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1560, 400]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"response\": {{ $('Generate AI Response').json.choices[0].message.content.replace(/\\*/g, '').replace(/\\[([0-9:]+)\\]/g, 'at $1') }},\n  \"timestamps\": {{ ($('Generate AI Response').json.choices[0].message.content.match(/\\d{1,2}:\\d{2}(:\\d{2})?/g) || []) }},\n  \"success\": true,\n  \"video_id\": \"{{ $('Validate Input').json.video_id }}\",\n  \"context_chunks\": {{ $('Supabase Vector Search').all().length }},\n  \"conversation_length\": {{ $('Get Chat History').all().length + 2 }}\n}",
+        "options": {}
+      },
+      "id": "format-response",
+      "name": "Format Voice Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [1780, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "webhook-response",
+      "name": "Respond to Voice Agent",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Supabase Vector Search').all().length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-video-data",
+      "name": "Check Video Data Available",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 100]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"response\": \"I don't have transcript data for that video yet. Please make sure the video has been processed first using the Chrome extension.\",\n  \"success\": false,\n  \"error\": \"No transcript data found\",\n  \"video_id\": \"{{ $('Validate Input').json.video_id }}\"\n}"
+      },
+      "id": "no-data-response",
+      "name": "No Data Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1340, 100]
+    }
+  ],
+  "connections": {
+    "Voice Agent Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Generate Question Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Question Embedding": {
+      "main": [
+        [
+          {
+            "node": "Supabase Vector Search",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Chat History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Vector Search": {
+      "main": [
+        [
+          {
+            "node": "Check Video Data Available",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Chat History": {
+      "main": [
+        [
+          {
+            "node": "Build AI Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI Context": {
+      "main": [
+        [
+          {
+            "node": "Generate AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate AI Response": {
+      "main": [
+        [
+          {
+            "node": "Store User Message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Store AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store User Message": {
+      "main": [
+        [
+          {
+            "node": "Format Voice Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store AI Response": {
+      "main": [
+        [
+          {
+            "node": "Format Voice Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Voice Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Voice Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Video Data Available": {
+      "main": [
+        [
+          {
+            "node": "Build AI Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Data Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z", 
+      "id": "youtube-voice-agent",
+      "name": "YouTube Voice Agent"
+    }
+  ],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "id": "youtube-voice-agent-workflow",
+  "versionId": "1"
+}

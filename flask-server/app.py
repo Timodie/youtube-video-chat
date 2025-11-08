@@ -101,7 +101,7 @@ def get_transcript_with_ytdlp(video_url, video_id):
             cmd = [
                 'yt-dlp',
                 '--write-auto-subs',
-                '--sub-langs', 'en',
+                '--sub-langs', 'en,en-US',
                 '--sub-format', 'vtt',
                 '--skip-download',
                 video_url
@@ -115,9 +115,15 @@ def get_transcript_with_ytdlp(video_url, video_id):
 
             # Look for files containing the video ID
             all_files = list(current_dir.glob("*.vtt"))
+            
+            # Look for English subtitle files with various patterns
+            english_patterns = ['.en-US.', '.en.', '.en_US.']
             for file in all_files:
-                if video_id in file.name and '.en.' in file.name:
-                    subtitle_files.append(file)
+                if video_id in file.name:
+                    for pattern in english_patterns:
+                        if pattern in file.name:
+                            subtitle_files.append(file)
+                            break
 
             # If no English files found, look for any subtitle files with the video ID
             if not subtitle_files:
