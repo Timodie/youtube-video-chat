@@ -77,7 +77,7 @@ CREATE TABLE youtube_transcripts (
 );
 
 -- Optimized for video_id filtering
-CREATE INDEX idx_youtube_transcripts_video_id 
+CREATE INDEX idx_youtube_transcripts_video_id
 ON youtube_transcripts USING btree ((metadata->>'video_id'));
 ```
 
@@ -154,19 +154,19 @@ CREATE OR REPLACE FUNCTION match_youtube_transcripts (
 
 **Test Transcript Processing:**
 ```bash
-curl -X POST "http://localhost:8080/transcript" \
+curl -X POST "http://localhost:5001/transcript" \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
 ```
 
 **Check Chat Status:**
 ```bash
-curl -X GET "http://localhost:8080/chat/status/dQw4w9WgXcQ"
+curl -X GET "http://localhost:5001/chat/status/dQw4w9WgXcQ"
 ```
 
 **Test AI Chat:**
 ```bash
-curl -X POST "http://localhost:8080/chat" \
+curl -X POST "http://localhost:5001/chat" \
   -H "Content-Type: application/json" \
   -d '{
     "chatInput": "What is this video about?",
@@ -176,7 +176,7 @@ curl -X POST "http://localhost:8080/chat" \
 
 **Clear Cache (Admin):**
 ```bash
-curl -X DELETE "http://localhost:8080/admin/clear-cache/dQw4w9WgXcQ"
+curl -X DELETE "http://localhost:5001/admin/clear-cache/dQw4w9WgXcQ"
 ```
 
 ## Development Environment
@@ -250,7 +250,7 @@ youtube-transcript/
 
 **Indexing Strategy:**
 - **Vector index**: ivfflat for semantic similarity search performance
-- **video_id index**: B-tree for fast video-specific filtering 
+- **video_id index**: B-tree for fast video-specific filtering
 - **Metadata GIN index**: Flexible JSONB filtering for timestamps and other attributes
 
 **Unique Constraint:**
@@ -283,11 +283,11 @@ youtube-transcript/
 **File: `rag-agent/ingest_youtube.py`**
 
 **Key Adaptations from Document Processing:**
-1. **ProcessedChunk Dataclass**: 
+1. **ProcessedChunk Dataclass**:
    - Added `video_id` field for efficient filtering
    - Reordered fields for YouTube-specific structure
 
-2. **Chunking Strategy**: 
+2. **Chunking Strategy**:
    - Replaced generic text chunking with VTT timestamp-aware chunking
    - Preserves video navigation capabilities with precise timestamps
 
@@ -303,7 +303,7 @@ youtube-transcript/
      "source": "youtube_transcript",
      "video_id": "dQw4w9WgXcQ",
      "start_time": "00:01:30.000",
-     "end_time": "00:01:45.000", 
+     "end_time": "00:01:45.000",
      "start_seconds": 90.0,
      "end_seconds": 105.0,
      "duration": 15.0,
@@ -481,7 +481,7 @@ After successful RAG implementation, optimization opportunities discovered:
    - No indication when chat functionality becomes available
    - Silent failures when RAG processing incomplete
 
-3. **Architectural Inefficiency**: 
+3. **Architectural Inefficiency**:
    - No transcript caching for repeated requests
    - No status API for chat readiness
    - Residual n8n dependencies still present
@@ -529,11 +529,11 @@ async def ingest_transcript(video_id, ...):
     existing_chunks = supabase.from_('youtube_transcript_pages') \
         .select('chunk_number', count='exact') \
         .eq('video_id', video_id).execute()
-    
+
     if existing_chunks.count > 0:
         print(f"✅ Video {video_id} already processed ({existing_chunks.count} chunks)")
         return True  # RAG data available for chat
-    
+
     # Only process if no chunks exist
     result = await process_and_store_transcript(...)
     return bool(result)
@@ -632,12 +632,12 @@ CREATE TABLE chat_histories (
 );
 
 -- Index for fast retrieval by video/session
-CREATE INDEX idx_chat_histories_session 
+CREATE INDEX idx_chat_histories_session
 ON chat_histories (video_id, session_id, timestamp);
 
 -- Index for summary range queries
-CREATE INDEX idx_chat_histories_summary_range 
-ON chat_histories (video_id, session_id, summarizes_from_id, summarizes_to_id) 
+CREATE INDEX idx_chat_histories_summary_range
+ON chat_histories (video_id, session_id, summarizes_from_id, summarizes_to_id)
 WHERE is_summary = true;
 ```
 
@@ -645,7 +645,7 @@ WHERE is_summary = true;
 
 **Key Insight:** Users need to see full conversation history in the UI, but LLM only needs efficient context for processing.
 
-**Approach:** 
+**Approach:**
 - **Never delete user/assistant messages** - Preserve full conversation for UI display
 - **Use summaries + recent messages for LLM** - Keep costs predictable and avoid token limits
 - **Smart summary caching** - Generate summaries once, reuse across requests
@@ -654,19 +654,19 @@ WHERE is_summary = true;
 ```python
 async def chat_with_video(self, video_id: str, chat_input: str, session_id: str = None):
     session_id = session_id or video_id
-    
+
     # Store user message first
     await self._store_chat_message(video_id, session_id, "user", chat_input)
-    
+
     # Get dual context: full history for display + efficient context for LLM
     context = await self._build_llm_context(video_id, session_id)
-    
+
     # Send efficient context to LLM
     result = await youtube_ai_assistant.run(context["llm_prompt"], deps=self.deps)
-    
+
     # Store AI response
     await self._store_chat_message(video_id, session_id, "assistant", str(result.data))
-    
+
     # Return response with full conversation history for frontend display
     return {
         "success": True,
@@ -680,7 +680,7 @@ async def _build_llm_context(self, video_id: str, session_id: str):
     # Get ALL user/assistant messages for UI display
     all_messages = await self._get_all_messages(video_id, session_id)
     display_messages = [m for m in all_messages if m['role'] in ['user', 'assistant']]
-    
+
     if len(display_messages) <= 12:
         # Short conversation - send everything to LLM
         llm_prompt = self._format_messages_for_llm(video_id, display_messages)
@@ -688,26 +688,26 @@ async def _build_llm_context(self, video_id: str, session_id: str):
             "llm_prompt": llm_prompt,
             "display_messages": display_messages
         }
-    
+
     # Long conversation - use summary + recent for LLM efficiency
     recent_messages = display_messages[-8:]  # Last 4 exchanges
     older_messages = display_messages[:-8]
-    
+
     # Get or create summary for older messages
     summary = await self._get_or_create_summary(video_id, session_id, older_messages)
-    
+
     # Build efficient LLM context
     llm_prompt = f"""
     Video ID: {video_id}
-    
+
     Previous conversation summary: {summary}
-    
+
     Recent conversation:
     {self._format_recent_messages(recent_messages)}
-    
+
     Current question: {display_messages[-1]['message']}
     """
-    
+
     return {
         "llm_prompt": llm_prompt,
         "display_messages": display_messages  # Full history for frontend
@@ -720,13 +720,13 @@ async def _get_or_create_summary(self, video_id: str, session_id: str, messages_
         from_id=messages_to_summarize[0]['id'],
         to_id=messages_to_summarize[-1]['id']
     )
-    
+
     if existing_summary:
         return existing_summary['message']
-    
+
     # Generate new summary (costs ~$0.01-0.05, done once)
     summary_text = await self._generate_conversation_summary(messages_to_summarize)
-    
+
     # Store summary with range metadata (never delete user/assistant messages)
     await self._store_chat_message(
         video_id, session_id,
@@ -736,7 +736,7 @@ async def _get_or_create_summary(self, video_id: str, session_id: str, messages_
         summarizes_from_id=messages_to_summarize[0]['id'],
         summarizes_to_id=messages_to_summarized[-1]['id']
     )
-    
+
     return summary_text
 ```
 
@@ -786,7 +786,7 @@ interface ChatResponse {
 }
 
 // Frontend filters out summary messages, shows only user/assistant
-const displayMessages = response.chat_history.filter(msg => 
+const displayMessages = response.chat_history.filter(msg =>
   msg.role === 'user' || msg.role === 'assistant'
 );
 ```
@@ -825,14 +825,14 @@ async def _find_summary_covering_range(self, video_id: str, session_id: str, fro
 async def _generate_conversation_summary(self, messages: List[Dict]) -> str:
     """Generate summary of conversation segment using OpenAI"""
     conversation_text = "\n".join([f"{msg['role']}: {msg['message']}" for msg in messages])
-    
+
     response = await self.deps.openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{
             "role": "system",
             "content": "Summarize this conversation about a YouTube video in 2-3 sentences. Focus on key topics discussed and questions asked."
         }, {
-            "role": "user", 
+            "role": "user",
             "content": conversation_text
         }]
     )

@@ -42,9 +42,9 @@ chrome-extension/
 ## 🛠️ Development
 
 ### Prerequisites
-- Node.js 18+ 
+- Node.js 18+
 - npm or yarn
-- Flask server running on localhost:8080
+- Flask server running on localhost:5001
 
 ### Setup
 ```bash
@@ -72,7 +72,7 @@ npm run type-check
 
 ### State Management
 - **useVideoId**: Tracks current YouTube video with SPA navigation support
-- **useTranscript**: Manages transcript fetching, caching, and error states  
+- **useTranscript**: Manages transcript fetching, caching, and error states
 - **useChat**: Handles AI chat, status polling, and message history
 
 ### API Integration

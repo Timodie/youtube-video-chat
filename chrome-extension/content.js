@@ -48,7 +48,7 @@ function createSidebar() {
       </div>
     </div>
   `;
-  
+
   // Add event listeners
   sidebar.addEventListener('click', function(e) {
     if (e.target.id === 'close-sidebar') {
@@ -59,14 +59,14 @@ function createSidebar() {
       sendChatMessage();
     }
   });
-  
+
   // Add enter key support for chat input
   sidebar.addEventListener('keypress', function(e) {
     if (e.target.id === 'chat-input' && e.key === 'Enter') {
       sendChatMessage();
     }
   });
-  
+
   return sidebar;
 }
 
@@ -77,7 +77,7 @@ function switchTab(tabName) {
     btn.classList.remove('active');
   });
   document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
-  
+
   // Update tab content
   document.querySelectorAll('.tab-content').forEach(content => {
     content.classList.remove('active');
@@ -89,28 +89,28 @@ function switchTab(tabName) {
 async function sendChatMessage() {
   const input = document.getElementById('chat-input');
   const message = input.value.trim();
-  
+
   if (!message) return;
-  
+
   // Get current video ID (prefer stored from transcript, fallback to URL parsing)
   const videoId = window.currentVideoId || getVideoId();
   if (!videoId) {
     addChatMessage('Error: Could not get video ID. Please extract transcript first.', 'ai');
     return;
   }
-  
+
   // Clear input
   input.value = '';
-  
+
   // Add user message
   addChatMessage(message, 'user');
-  
+
   // Add loading bubble
   addLoadingMessage();
-  
+
   try {
     // Send chat message to Flask server
-    const response = await fetch('http://localhost:8080/chat', {
+    const response = await fetch('http://localhost:5001/chat', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -121,18 +121,18 @@ async function sendChatMessage() {
         sessionId: videoId  // Use video ID as session ID
       })
     });
-    
+
     const data = await response.json();
-    
+
     // Remove loading message
     removeLoadingMessage();
-    
+
     if (data.success) {
       // Get the response from the server (Flask returns 'response' field)
       const aiResponse = data.response || 'No response from AI';
-      
+
       addChatMessage(aiResponse, 'ai');
-      
+
       // Log additional info for debugging
       console.log('Chat response data:', data);
       if (data.timestamps && data.timestamps.length > 0) {
@@ -141,11 +141,11 @@ async function sendChatMessage() {
     } else {
       addChatMessage(`Error: ${data.error || 'Unknown error'}`, 'ai');
     }
-    
+
   } catch (error) {
     console.error('Error sending chat message:', error);
     removeLoadingMessage();
-    addChatMessage('Could not connect to chat server. Make sure the Flask server is running on localhost:8080', 'ai');
+    addChatMessage('Could not connect to chat server. Make sure the Flask server is running on localhost:5001', 'ai');
   }
 }
 
@@ -153,10 +153,10 @@ async function sendChatMessage() {
 function addChatMessage(message, sender) {
   const chatMessages = document.getElementById('chat-messages');
   if (!chatMessages) return;
-  
+
   const messageDiv = document.createElement('div');
   messageDiv.className = `chat-message ${sender}`;
-  
+
   if (sender === 'user') {
     messageDiv.innerHTML = `
       <div class="message-avatar">👤</div>
@@ -180,7 +180,7 @@ function addChatMessage(message, sender) {
       </div>
     `;
   }
-  
+
   chatMessages.appendChild(messageDiv);
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -189,7 +189,7 @@ function addChatMessage(message, sender) {
 function addLoadingMessage() {
   const chatMessages = document.getElementById('chat-messages');
   if (!chatMessages) return;
-  
+
   const loadingDiv = document.createElement('div');
   loadingDiv.className = 'chat-message ai loading-message';
   loadingDiv.id = 'loading-chat-message';
@@ -203,7 +203,7 @@ function addLoadingMessage() {
       </div>
     </div>
   `;
-  
+
   chatMessages.appendChild(loadingDiv);
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -221,26 +221,26 @@ async function fetchTranscript(videoUrl) {
   try {
     // Extract video ID for chat functionality
     const videoId = extractVideoId(videoUrl);
-    
-    const response = await fetch('http://localhost:8080/transcript', {
+
+    const response = await fetch('http://localhost:5001/transcript', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ url: videoUrl })
     });
-    
+
     const data = await response.json();
-    
+
     if (data.success) {
       // Step 1: Display transcript immediately (whether cached or fresh)
       displayTranscript(data);
-      
+
       // Step 2: Check chat status immediately
       if (videoId) {
         console.log('Checking chat status for video:', videoId);
         await checkChatStatus(videoId);
-        
+
         // Step 3: Start polling if RAG processing not complete
         if (!data.rag_stored) {
           console.log('RAG not ready, starting polling for video:', videoId);
@@ -259,7 +259,7 @@ async function fetchTranscript(videoUrl) {
     }
   } catch (error) {
     console.error('Error fetching transcript:', error);
-    displayError('Could not connect to transcript server. Make sure the Flask server is running on localhost:8080');
+    displayError('Could not connect to transcript server. Make sure the Flask server is running on localhost:5001');
   }
 }
 
@@ -269,12 +269,12 @@ function extractVideoId(url) {
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
     /youtube\.com\/watch\?.*v=([^&\n?#]+)/
   ];
-  
+
   for (const pattern of patterns) {
     const match = url.match(pattern);
     if (match) return match[1];
   }
-  
+
   return null;
 }
 
@@ -282,13 +282,13 @@ function extractVideoId(url) {
 function displayTranscript(data) {
   const transcriptTab = document.getElementById('transcript-tab');
   if (!transcriptTab) return;
-  
+
   // Updated status display for optimized architecture
   const cacheStatus = data.cached ? '🚀 Cached' : '🆕 Fresh';
   const ragStatus = data.rag_stored ? '✅ Chat Ready' : '⏳ Processing...';
   const extractionTime = data.extraction_time ? ` (${data.extraction_time.toFixed(1)}s)` : '';
   const storageStatus = `${cacheStatus}${extractionTime} | ${ragStatus}`;
-  
+
   transcriptTab.innerHTML = `
     <div class="transcript-header">
       <h4>${data.title}</h4>
@@ -303,10 +303,10 @@ function displayTranscript(data) {
       `).join('')}
     </div>
   `;
-  
+
   // Store video ID for chat functionality
   window.currentVideoId = data.video_id;
-  
+
   // Add click handlers for transcript items to jump to video time
   const transcriptItems = transcriptTab.querySelectorAll('.transcript-item');
   transcriptItems.forEach(item => {
@@ -321,7 +321,7 @@ function displayTranscript(data) {
 function displayError(errorMessage) {
   const transcriptTab = document.getElementById('transcript-tab');
   if (!transcriptTab) return;
-  
+
   transcriptTab.innerHTML = `
     <div class="error-state">
       <div class="icon">❌</div>
@@ -344,12 +344,12 @@ function jumpToVideoTime(seconds) {
 // Function to check chat status for a video
 async function checkChatStatus(videoId) {
   try {
-    const response = await fetch(`http://localhost:8080/chat/status/${videoId}`);
-    
+    const response = await fetch(`http://localhost:5001/chat/status/${videoId}`);
+
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
-    
+
     const status = await response.json();
     console.log('Chat status:', status);
     updateChatAvailability(status);
@@ -369,15 +369,15 @@ async function checkChatStatus(videoId) {
 function updateChatAvailability(status) {
   const chatInput = document.getElementById('chat-input');
   const sendButton = document.querySelector('.send-btn');
-  
+
   if (!chatInput) return;
-  
+
   if (status.available && status.status === 'ready') {
     // Enable chat
     chatInput.disabled = false;
     chatInput.placeholder = "Ask about this video...";
     if (sendButton) sendButton.disabled = false;
-    
+
     // Add status message if this is a transition to ready
     if (!window.chatWasReady) {
       addChatMessage('🎉 Chat is now ready! You can ask questions about this video.', 'system');
@@ -387,7 +387,7 @@ function updateChatAvailability(status) {
     // Disable chat with appropriate message
     chatInput.disabled = true;
     if (sendButton) sendButton.disabled = true;
-    
+
     switch (status.status) {
       case 'processing':
         chatInput.placeholder = '⏳ Processing transcript for AI chat...';
@@ -401,18 +401,18 @@ function updateChatAvailability(status) {
           window.processingMessageShown = true;
         }
         break;
-        
+
       case 'not_found':
         chatInput.placeholder = '❌ Video not found. Extract transcript first.';
         addChatMessage('❌ Video transcript not found. Please click the "Get Transcript" button first.', 'system');
         break;
-        
+
       case 'error':
       case 'rag_unavailable':
         chatInput.placeholder = '⚠️ Chat temporarily unavailable';
         addChatMessage(`⚠️ ${status.message || 'Chat is temporarily unavailable.'}`, 'system');
         break;
-        
+
       default:
         chatInput.placeholder = '⏳ Chat not ready yet...';
         addChatMessage('⏳ Chat is not ready yet. Please wait for transcript processing.', 'system');
@@ -424,10 +424,10 @@ function updateChatAvailability(status) {
 function addRetryButton() {
   const chatMessages = document.getElementById('chat-messages');
   if (!chatMessages) return;
-  
+
   // Check if retry button already exists
   if (document.getElementById('chat-retry-btn')) return;
-  
+
   const retryDiv = document.createElement('div');
   retryDiv.className = 'chat-message system';
   retryDiv.innerHTML = `
@@ -435,10 +435,10 @@ function addRetryButton() {
       <button id="chat-retry-btn" class="retry-chat-btn">🔄 Check Chat Status</button>
     </div>
   `;
-  
+
   chatMessages.appendChild(retryDiv);
   chatMessages.scrollTop = chatMessages.scrollHeight;
-  
+
   // Add click handler for retry button
   document.getElementById('chat-retry-btn').addEventListener('click', () => {
     if (window.currentVideoId) {
@@ -456,16 +456,16 @@ function startChatStatusPolling(videoId) {
     clearInterval(chatStatusPolling);
     chatStatusPolling = null;
   }
-  
+
   console.log('Starting chat status polling for video:', videoId);
-  
+
   // Poll every 15 seconds (reasonable interval)
   chatStatusPolling = setInterval(async () => {
     console.log('Polling chat status for video:', videoId);
-    
+
     try {
       const status = await checkChatStatus(videoId);
-      
+
       if (status && status.available && status.status === 'ready') {
         console.log('Chat is now ready, stopping polling');
         clearInterval(chatStatusPolling);
@@ -476,7 +476,7 @@ function startChatStatusPolling(videoId) {
       // Continue polling despite errors
     }
   }, 15000); // 15 seconds
-  
+
   // Auto-stop polling after 10 minutes (40 polls) to prevent infinite polling
   setTimeout(() => {
     if (chatStatusPolling) {
@@ -499,12 +499,12 @@ function stopChatStatusPolling() {
 function retryTranscript() {
   const videoUrl = window.location.href;
   const transcriptTab = document.getElementById('transcript-tab');
-  
+
   // Reset chat state
   window.chatWasReady = false;
   window.processingMessageShown = false;
   stopChatStatusPolling();
-  
+
   if (transcriptTab) {
     transcriptTab.innerHTML = `
       <div class="loading-state">
@@ -520,16 +520,16 @@ function retryTranscript() {
 // Function to toggle sidebar
 function toggleSidebar() {
   let sidebar = document.getElementById('transcript-sidebar');
-  
+
   if (!sidebar) {
     sidebar = createSidebar();
     document.body.appendChild(sidebar);
-    
+
     // Animate in
     setTimeout(() => {
       sidebar.classList.add('open');
     }, 10);
-    
+
     // Start fetching transcript
     const videoUrl = window.location.href;
     fetchTranscript(videoUrl);
@@ -555,22 +555,22 @@ function createTranscriptButton() {
   button.id = 'transcript-extractor-btn';
   button.innerHTML = '📝 Get Transcript';
   button.className = 'transcript-btn';
-  
+
   button.addEventListener('click', function() {
     const videoId = getVideoId();
     const videoUrl = window.location.href;
-    
+
     if (videoId) {
       console.log('Video ID:', videoId);
       console.log('Video URL:', videoUrl);
-      
+
       // Toggle sidebar
       toggleSidebar();
     } else {
       alert('Could not find video ID');
     }
   });
-  
+
   return button;
 }
 
@@ -580,15 +580,15 @@ function injectButton() {
   const checkForPlayer = setInterval(() => {
     const actionsContainer = document.querySelector('#actions');
     const existingButton = document.querySelector('#transcript-extractor-btn');
-    
+
     if (actionsContainer && !existingButton) {
       const button = createTranscriptButton();
-      
+
       // Create a container div
       const buttonContainer = document.createElement('div');
       buttonContainer.className = 'transcript-btn-container';
       buttonContainer.appendChild(button);
-      
+
       // Insert after the like/dislike buttons
       const likeButton = actionsContainer.querySelector('#segmented-like-button');
       if (likeButton) {
@@ -596,16 +596,16 @@ function injectButton() {
       } else {
         actionsContainer.appendChild(buttonContainer);
       }
-      
+
       clearInterval(checkForPlayer);
       console.log('Transcript button injected');
     }
   }, 1000);
-  
+
   // Stop checking after 30 seconds
   setTimeout(() => {
     clearInterval(checkForPlayer);
-  }, 30000);
+  }, 50010);
 }
 
 // Handle YouTube's single-page app navigation
@@ -620,7 +620,7 @@ if (window.location.pathname === '/watch') {
 const observer = new MutationObserver(() => {
   if (currentUrl !== window.location.href) {
     currentUrl = window.location.href;
-    
+
     if (window.location.pathname === '/watch') {
       setTimeout(injectButton, 1000); // Delay to ensure page is loaded
     }

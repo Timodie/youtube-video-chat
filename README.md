@@ -37,7 +37,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Server runs on `http://localhost:8080`
+Server runs on `http://localhost:5001`
 
 ### 2. Chrome Extension
 
@@ -68,7 +68,7 @@ Server runs on `http://localhost:8080`
 ### Transcript API Example
 
 ```bash
-curl -X POST http://localhost:8080/transcript \
+curl -X POST http://localhost:5001/transcript \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.youtube.com/watch?v=VIDEO_ID"}'
 ```

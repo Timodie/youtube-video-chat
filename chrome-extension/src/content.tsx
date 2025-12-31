@@ -47,13 +47,13 @@ function App() {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
-    
+
     // Unmount React button root
     if (buttonRootRef.current) {
       buttonRootRef.current.unmount();
       buttonRootRef.current = null;
     }
-    
+
     // Remove button container
     const buttonContainer = document.querySelector('#transcript-button-root');
     if (buttonContainer) {
@@ -67,12 +67,12 @@ function App() {
     intervalRef.current = setInterval(() => {
       const actionsContainer = document.querySelector('#actions');
       const existingButton = document.querySelector('#transcript-extractor-btn');
-      
+
       if (actionsContainer && !existingButton) {
         // Create container for React button
         const buttonContainer = document.createElement('div');
         buttonContainer.id = 'transcript-button-root';
-        
+
         // Insert after the like/dislike buttons
         const likeButton = actionsContainer.querySelector('#segmented-like-button');
         if (likeButton && likeButton.parentNode) {
@@ -80,16 +80,16 @@ function App() {
         } else {
           actionsContainer.appendChild(buttonContainer);
         }
-        
+
         // Render React button
         buttonRootRef.current = createRoot(buttonContainer);
         buttonRootRef.current.render(
-          <TranscriptButton 
-            videoId={videoId} 
-            onClick={() => setSidebarVisible(true)} 
+          <TranscriptButton
+            videoId={videoId}
+            onClick={() => setSidebarVisible(true)}
           />
         );
-        
+
         setButtonInjected(true);
         if (intervalRef.current) {
           clearInterval(intervalRef.current);
@@ -98,22 +98,22 @@ function App() {
         console.log('Transcript button injected (React)');
       }
     }, 1000);
-    
+
     // Stop checking after 30 seconds
     timeoutRef.current = setTimeout(() => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
-    }, 30000);
+    }, 50010);
   };
 
   return (
     <>
       {sidebarVisible && (
-        <Sidebar 
-          videoId={videoId} 
-          onClose={() => setSidebarVisible(false)} 
+        <Sidebar
+          videoId={videoId}
+          onClose={() => setSidebarVisible(false)}
         />
       )}
     </>
@@ -129,7 +129,7 @@ function initializeApp() {
   const appContainer = document.createElement('div');
   appContainer.id = 'transcript-app-root';
   document.body.appendChild(appContainer);
-  
+
   // Render the app
   appRoot = createRoot(appContainer);
   appRoot.render(<App />);
@@ -141,7 +141,7 @@ function cleanupApp() {
     appRoot.unmount();
     appRoot = null;
   }
-  
+
   const appContainer = document.querySelector('#transcript-app-root');
   if (appContainer) {
     appContainer.remove();
